@@ -304,7 +304,6 @@ function RoomShell({ items, query, focusedZone, onFocus }: { items: Item[]; quer
     <div className="room-plant plant-left" aria-hidden="true"><i /><i /><i /><i /><b /></div>
     <div className="room-plant plant-right" aria-hidden="true"><i /><i /><i /><i /><b /></div>
     <div className="floor-lamp" aria-hidden="true"><i /><b /></div>
-    <div className="reading-chair" aria-hidden="true"><div className="chair-back" /><div className="chair-seat" /><i /><i /></div>
     <div className="room-floor"><div className="room-rug"><span>THERE'S MORE<br />TO THE STORY</span></div></div>
     <div className="door-threshold"><span>THE CURIOSITY ROOM</span></div>
     {kinds.map(kind => <button type="button" key={kind} className={zoneClass(kind)} disabled={Boolean(normalizedRoomQuery) && resultCount(kind) === 0} onClick={() => onFocus(kind)} aria-label={`Open ${labels[kind]} collection, ${resultCount(kind)} ${normalizedRoomQuery ? 'matching' : 'saved'}`}><span>{labels[kind]}</span><b>{resultCount(kind)}</b></button>)}

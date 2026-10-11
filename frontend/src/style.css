@@ -121,11 +121,6 @@ textarea { resize: vertical; }
 .room-plant i { position: absolute; left: 25px; bottom: 21px; width: 19px; height: 31px; border-radius: 90% 10% 80% 20%; background: #536d43; transform-origin: bottom; box-shadow: inset 4px 0 #79905b; }
 .room-plant i:nth-child(1) { transform: rotate(-52deg); }.room-plant i:nth-child(2) { transform: rotate(-20deg) translateY(-9px); }.room-plant i:nth-child(3) { transform: rotate(22deg) translateY(-12px); }.room-plant i:nth-child(4) { transform: rotate(54deg); }
 .plant-left { left: 25%; bottom: 27%; transform: scale(.72); }.plant-right { right: 18%; bottom: 27%; transform: scale(.85); }
-.reading-chair { position: absolute; z-index: 5; left: 27%; bottom: 24%; width: 82px; height: 105px; pointer-events: none; filter: drop-shadow(5px 6px 5px #2e1c164a); }
-.chair-back { position: absolute; left: 7px; top: 0; width: 67px; height: 72px; border: 5px solid #5a3026; border-radius: 26px 26px 12px 12px; background: linear-gradient(110deg, #984d3f, #b65d47); }
-.chair-back::after { content: ""; position: absolute; inset: 12px 14px 18px; border-radius: 8px; background: #d6a552; transform: rotate(-5deg); box-shadow: 0 4px #b37b36; }
-.chair-seat { position: absolute; left: 5px; bottom: 17px; width: 72px; height: 30px; border: 5px solid #5a3026; border-radius: 9px; background: #a65040; }
-.reading-chair > i { position: absolute; bottom: 0; width: 6px; height: 22px; background: #4c3024; }.reading-chair > i:nth-of-type(1) { left: 14px; transform: rotate(5deg); }.reading-chair > i:nth-of-type(2) { right: 14px; transform: rotate(-5deg); }
 .floor-lamp { position: absolute; z-index: 5; left: 7%; bottom: 25%; width: 55px; height: 185px; pointer-events: none; }
 .floor-lamp::before { content: ""; position: absolute; left: 13px; bottom: 7px; width: 4px; height: 132px; border-radius: 4px; background: #3e2a20; transform: rotate(4deg); transform-origin: bottom; }
 .floor-lamp::after { content: ""; position: absolute; left: 0; bottom: 0; width: 31px; height: 9px; border-radius: 50%; background: #3e2a20; }
@@ -147,11 +142,6 @@ textarea { resize: vertical; }
 .right-wall::before { height: 12px; }.right-wall::after { height: 12px; }
 .room-floor { left: 8%; right: 7%; height: 30%; bottom: 1%; background: linear-gradient(135deg, #725039, #936c4e 58%, #684630); clip-path: polygon(4% 0, 89% 0, 100% 78%, 47% 100%, 0 67%); box-shadow: inset 0 12px 18px #33211542, 0 10px 13px #3c291b3d; }
 .room-rug { left: 18%; right: 15%; top: 8%; bottom: 13%; border-color: #c7a56f; color: #d8bd91; background: repeating-linear-gradient(45deg, #743f3c 0 13px, #7e4742 13px 26px); clip-path: polygon(7% 0, 91% 0, 100% 77%, 48% 100%, 0 69%); }
-.reading-chair { left: 39%; bottom: 19%; width: 126px; height: 154px; transform: scale(1); }
-.chair-back { left: 8px; width: 104px; height: 112px; border-color: #624532; border-radius: 40px 40px 18px 18px; background: linear-gradient(110deg, #e1cfa8, #f1e2bd 55%, #cbb58d); box-shadow: inset 10px 0 #bda57d55; }
-.chair-back::after { inset: 27px 25px 22px; border-radius: 9px 22px 9px 20px; background: #a75836; box-shadow: 0 4px #743922; }
-.chair-seat { left: 8px; bottom: 19px; width: 106px; height: 43px; border-color: #624532; background: #e5d3ae; }
-.reading-chair > i { height: 25px; width: 7px; }.reading-chair > i:nth-of-type(1) { left: 22px; }.reading-chair > i:nth-of-type(2) { right: 22px; }
 .plant-left { z-index: 6; left: 20%; bottom: 23%; transform: scale(.95); }.plant-right { z-index: 6; right: 4%; bottom: 21%; transform: scale(1.2); }
 .floor-lamp { left: 5%; bottom: 24%; }
 .room-catalog { left: 45%; right: 20%; }
