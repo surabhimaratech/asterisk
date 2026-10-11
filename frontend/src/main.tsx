@@ -32,6 +32,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Kind | 'all'>('all')
   const [view, setView] = useState<ViewMode>(() => localStorage.getItem('asterisk-view') === 'index' ? 'index' : 'library')
+  const [focusedZone, setFocusedZone] = useState<Kind | null>(null)
   const [selectedBook, setSelectedBook] = useState<number | null>(null)
   const [selectedMovie, setSelectedMovie] = useState<number | null>(null)
   const [selectedPodcast, setSelectedPodcast] = useState<number | null>(null)
@@ -119,6 +120,18 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  function focusZone(kind: Kind) {
+    setFocusedZone(kind)
+    setFilter(kind)
+    window.setTimeout(() => document.getElementById('focused-collection')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
+
+  function returnToRoom() {
+    setFocusedZone(null)
+    setFilter('all')
+    window.setTimeout(() => document.getElementById('curiosity-room')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50)
+  }
+
   const normalizedQuery = query.trim().toLowerCase()
   const visible = items.filter(item =>
     (filter === 'all' || item.kind === filter) &&
@@ -180,15 +193,17 @@ function App() {
         </div>
       </div>
       <div className="filter-row" aria-label="Filter library">
-        <button type="button" className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All <span>{items.length}</span></button>
-        {kinds.map(kind => <button type="button" key={kind} className={filter === kind ? 'active' : ''} onClick={() => setFilter(kind)}>{labels[kind]} <span>{items.filter(item => item.kind === kind).length}</span></button>)}
+        <button type="button" className={filter === 'all' ? 'active' : ''} onClick={returnToRoom}>All <span>{items.length}</span></button>
+        {kinds.map(kind => <button type="button" key={kind} className={filter === kind ? 'active' : ''} onClick={() => focusZone(kind)}>{labels[kind]} <span>{items.filter(item => item.kind === kind).length}</span></button>)}
       </div>
 
-      {loading ? <div className="empty">Loading your library…</div> : visible.length === 0 ?
+      {loading ? <div className="empty">Loading your library…</div> : view === 'index' ? (visible.length === 0 ?
         <div className="empty">{items.length === 0 ? 'Your library is waiting for its first curiosity. Save a book, question, or passing thought above.' : 'No curiosities match your search and filter.'}</div> :
-        view === 'index' ? <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} onEdit={edit} onRemove={remove} />)}</div> : <>
-        <RoomShell items={items} />
-        <div className="collection-library">
+        <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} onEdit={edit} onRemove={remove} />)}</div>) : <>
+        <RoomShell items={items} query={query} focusedZone={focusedZone} onFocus={focusZone} />
+        {focusedZone && <div className="room-focus-nav"><button type="button" onClick={returnToRoom}>← Back to room</button><span>{labels[focusedZone]} collection</span></div>}
+        {!focusedZone && <div className="room-invitation"><span>✦</span><p>Wander in. Choose a corner of the room to look closer.</p></div>}
+        {focusedZone && <div className="collection-library" id="focused-collection">
           {(filter === 'all' || filter === 'book') && (books.length > 0 ? <section className="visual-collection book-collection">
             <div className="shelf-heading"><div><span>THE BOOKSHELF</span><h3>{normalizedQuery ? `${books.length} matching ${books.length === 1 ? 'book' : 'books'}` : `${books.length} ${books.length === 1 ? 'volume' : 'volumes'}`}</h3></div><p>Select a spine to take a closer look.</p></div>
             <div className="shelf" aria-label="Bookshelf"><div className="shelf-books">
@@ -246,7 +261,7 @@ function App() {
           </section> : filter === 'thought' && <CollectionEmpty icon="📝" message="No loose thoughts tucked away yet." action="Capture a passing thought" onAction={() => startCapture('thought')} />)}
 
           {deferredCount > 0 && <div className="index-nudge"><span>✦</span><p><strong>{deferredCount} other {deferredCount === 1 ? 'curiosity is' : 'curiosities are'} nearby.</strong> Their visual collections are still taking shape.</p><button type="button" onClick={() => setView('index')}>View in Index</button></div>}
-        </div></>}
+        </div>}</>}
     </section>
 
     <section className="future"><div>✧ &nbsp;COMING NEXT</div><h2>Sidequests</h2><p>Follow unexpected connections and discover where your curiosity leads.</p><button disabled>✦ Sidequests — coming soon</button></section>
@@ -266,8 +281,13 @@ function ItemCard({ item, onEdit, onRemove }: { item: Item; onEdit: (item: Item)
   </article>
 }
 
-function RoomShell({ items }: { items: Item[] }) {
+function RoomShell({ items, query, focusedZone, onFocus }: { items: Item[]; query: string; focusedZone: Kind | null; onFocus: (kind: Kind) => void }) {
+  const normalizedRoomQuery = query.trim().toLowerCase()
+  const matchesRoomQuery = (item: Item) => !normalizedRoomQuery || `${item.title} ${item.note || ''}`.toLowerCase().includes(normalizedRoomQuery)
+  const miniClass = (item: Item) => `mini-object ${matchesRoomQuery(item) ? 'match' : 'nonmatch'}`
   const roomItems = (kind: Kind, limit: number) => items.filter(item => item.kind === kind).slice(0, limit)
+  const resultCount = (kind: Kind) => items.filter(item => item.kind === kind && matchesRoomQuery(item)).length
+  const zoneClass = (kind: Kind) => `room-zone zone-${kind} ${focusedZone === kind ? 'active' : ''} ${normalizedRoomQuery && resultCount(kind) === 0 ? 'no-match' : ''}`
   const roomBooks = roomItems('book', 18)
   const roomMovies = roomItems('movie', 5)
   const roomPodcasts = roomItems('podcast', 3)
@@ -275,13 +295,14 @@ function RoomShell({ items }: { items: Item[] }) {
   const roomConcepts = roomItems('concept', 5)
   const roomQuestions = roomItems('question', 4)
   const roomThoughts = roomItems('thought', 5)
-  return <section className="room-shell" aria-label="Asterisk library room viewed from the doorway">
+  return <section className={`room-shell ${normalizedRoomQuery ? 'searching' : ''}`} id="curiosity-room" aria-label="Asterisk library room viewed from the doorway">
     <div className="room-glow" />
-    <div className="left-wall"><div className="wall-frame">LISTEN<br />&amp; WATCH</div><div className="media-console"><div className="console-screen"><div className="mini-movies">{roomMovies.map(movie => <i key={movie.id} title={movie.title} style={{ background: coverPalettes[movie.id % coverPalettes.length][0] }} />)}</div></div><div className="console-doors"><i /><i /></div></div><div className="radio-stand"><div className="mini-tapes">{roomPodcasts.map(podcast => <i key={podcast.id} title={podcast.title} />)}</div><div className="room-radio"><i /><b /></div></div></div>
-    <div className="back-wall"><div className="room-emblem">✦<small>ASTERISK</small></div><div className="room-bookcase"><div className="case-top" /><div className="case-bays"><i /><i /><i /><i /><i /><i /></div><div className="miniature-books">{roomBooks.map(book => <i key={book.id} title={book.title} style={{ '--mini-book': spineColors[book.id % spineColors.length], height: `${24 + (book.id % 13)}px` } as React.CSSProperties} />)}</div><div className="case-base" /></div><div className="room-catalog"><i /><i /><i /><i />{roomConcepts.map(concept => <b key={concept.id} title={concept.title}>{concept.title.slice(0, 1)}</b>)}</div></div>
-    <div className="right-wall"><div className="wall-frame right-frame">READ<br />&amp; WONDER</div><div className="room-desk"><div className="mini-papers">{roomArticles.map(article => <i key={article.id} title={article.title} />)}</div><div className="mini-thoughts">{roomThoughts.map(thought => <i key={thought.id} title={thought.title}>✦</i>)}</div><div className="desk-top" /><div className="desk-drawers"><i /><i /></div><div className="desk-legs"><i /><i /></div></div><div className="question-crate"><div className="mini-bulbs">{roomQuestions.map(question => <i key={question.id} title={question.title}>?</i>)}</div></div></div>
+    <div className="left-wall"><div className="wall-frame">LISTEN<br />&amp; WATCH</div><div className="media-console"><div className="console-screen"><div className="mini-movies">{roomMovies.map(movie => <i className={miniClass(movie)} key={movie.id} title={movie.title} style={{ background: coverPalettes[movie.id % coverPalettes.length][0] }} />)}</div></div><div className="console-doors"><i /><i /></div></div><div className="radio-stand"><div className="mini-tapes">{roomPodcasts.map(podcast => <i className={miniClass(podcast)} key={podcast.id} title={podcast.title} />)}</div><div className="room-radio"><i /><b /></div></div></div>
+    <div className="back-wall"><div className="room-emblem">✦<small>ASTERISK</small></div><div className="room-bookcase"><div className="case-top" /><div className="case-bays"><i /><i /><i /><i /><i /><i /></div><div className="miniature-books">{roomBooks.map(book => <i className={miniClass(book)} key={book.id} title={book.title} style={{ '--mini-book': spineColors[book.id % spineColors.length], height: `${24 + (book.id % 13)}px` } as React.CSSProperties} />)}</div><div className="case-base" /></div><div className="room-catalog"><i /><i /><i /><i />{roomConcepts.map(concept => <b className={miniClass(concept)} key={concept.id} title={concept.title}>{concept.title.slice(0, 1)}</b>)}</div></div>
+    <div className="right-wall"><div className="wall-frame right-frame">READ<br />&amp; WONDER</div><div className="room-desk"><div className="mini-papers">{roomArticles.map(article => <i className={miniClass(article)} key={article.id} title={article.title} />)}</div><div className="mini-thoughts">{roomThoughts.map(thought => <i className={miniClass(thought)} key={thought.id} title={thought.title}>✦</i>)}</div><div className="desk-top" /><div className="desk-drawers"><i /><i /></div><div className="desk-legs"><i /><i /></div></div><div className="question-crate"><div className="mini-bulbs">{roomQuestions.map(question => <i className={miniClass(question)} key={question.id} title={question.title}>?</i>)}</div></div></div>
     <div className="room-floor"><div className="room-rug"><span>THERE'S MORE<br />TO THE STORY</span></div></div>
     <div className="door-threshold"><span>THE CURIOSITY ROOM</span></div>
+    {kinds.map(kind => <button type="button" key={kind} className={zoneClass(kind)} disabled={Boolean(normalizedRoomQuery) && resultCount(kind) === 0} onClick={() => onFocus(kind)} aria-label={`Open ${labels[kind]} collection, ${resultCount(kind)} ${normalizedRoomQuery ? 'matching' : 'saved'}`}><span>{labels[kind]}</span><b>{resultCount(kind)}</b></button>)}
   </section>
 }
 
