@@ -55,7 +55,7 @@ textarea { resize: vertical; }
 .date { font-size: 11px; color: #9a9287; }
 .item h3 { font: normal 23px Georgia, serif; margin: 17px 0 6px; overflow-wrap: anywhere; }
 .item p { color: #716b64; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.item a, .book-detail a, .movie-detail a, .podcast-detail a { color: #586f5d; font-size: 13px; }
+.item a, .book-detail a, .movie-detail a, .podcast-detail a, .article-detail a { color: #586f5d; font-size: 13px; }
 .item-actions { display: flex; gap: 16px; margin-top: auto; padding-top: 24px; }
 .item-actions button { border: 0; background: transparent; color: #777067; font-size: 12px; padding: 0; }
 .item-actions button:hover { text-decoration: underline; }
@@ -106,14 +106,29 @@ textarea { resize: vertical; }
 .tape-window b { font-size: 8px; }
 .cassette-notches { text-align: center; font-size: 8px; letter-spacing: .35em; }
 
-.book-detail, .movie-detail, .podcast-detail { position: relative; margin-top: 25px; display: grid; grid-template-columns: 170px 1fr; gap: 28px; background: #fffdf7; border: 1px solid #d9cebc; border-radius: 5px 13px 13px 5px; padding: 28px; box-shadow: inset 13px 0 18px #8a68431a, 0 8px 22px #5b463322; animation: reveal-book .2s ease-out; }
+.article-collection { background: #eeeae1; border-color: #d9d1c2; }
+.press-heading span { color: #8b443d; }
+.article-pile { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-items: start; gap: 17px; padding: 26px; border-radius: 8px; background: #c7bca9; box-shadow: inset 0 8px 18px #594a3530; }
+.article-clipping { position: relative; min-height: 230px; display: flex; flex-direction: column; padding: 25px 24px 24px; border: 0; color: #302d29; background: repeating-linear-gradient(0deg, transparent 0 23px, #8e887f13 24px), #fbf8ef; text-align: left; box-shadow: 2px 5px 8px #4a40334d; transition: transform .18s ease, box-shadow .18s ease; clip-path: polygon(0 0, calc(100% - 24px) 0, 100% 24px, 100% 100%, 0 100%); }
+.article-clipping:nth-child(3n+1) { transform: rotate(-1deg); }
+.article-clipping:nth-child(3n+2) { transform: rotate(.8deg); }
+.article-clipping:hover, .article-clipping:focus-visible, .article-clipping.selected { transform: translateY(-7px) rotate(0); box-shadow: 4px 12px 16px #4a40335c; outline: 3px solid #fff; outline-offset: 2px; }
+.paperclip { position: absolute; width: 12px; height: 43px; right: 24px; top: -8px; border: 2px solid #8b8b86; border-radius: 8px; transform: rotate(8deg); }
+.publication { padding-right: 24px; font-size: 7px; font-weight: 800; letter-spacing: .12em; color: #746d63; }
+.publication b { color: #a64e44; }
+.article-clipping > strong { margin-top: 18px; font: 700 23px/1.04 Georgia, serif; }
+.article-rule { width: 42px; height: 3px; margin: 15px 0 12px; background: #a64e44; }
+.article-clipping > small { display: -webkit-box; color: #6e685f; font: 12px/1.5 Georgia, serif; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; }
+.folded-corner { position: absolute; right: 0; top: 0; border-style: solid; border-width: 0 24px 24px 0; border-color: transparent #d6cebe #bdb4a4 transparent; }
+
+.book-detail, .movie-detail, .podcast-detail, .article-detail { position: relative; margin-top: 25px; display: grid; grid-template-columns: 170px 1fr; gap: 28px; background: #fffdf7; border: 1px solid #d9cebc; border-radius: 5px 13px 13px 5px; padding: 28px; box-shadow: inset 13px 0 18px #8a68431a, 0 8px 22px #5b463322; animation: reveal-book .2s ease-out; }
 @keyframes reveal-book { from { opacity: 0; transform: translateY(-8px); } }
 .bookplate { align-self: start; border: 1px solid #b9a991; outline: 3px double #cbbca6; outline-offset: -7px; padding: 25px 12px; text-align: center; color: #81715e; font: 9px/1.8 Georgia, serif; letter-spacing: .14em; }
 .bookplate strong { font-size: 14px; color: #5c4c3b; }
-.book-detail-copy > span, .movie-detail-copy > span, .podcast-detail-copy > span { color: #9a8068; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
-.book-detail h3, .movie-detail h3, .podcast-detail h3 { font: normal 30px/1.15 Georgia, serif; margin: 8px 35px 12px 0; }
-.book-detail p, .movie-detail p, .podcast-detail p { white-space: pre-wrap; color: #655f57; line-height: 1.65; margin: 0 0 12px; }
-.book-detail p.muted, .movie-detail p.muted, .podcast-detail p.muted { color: #a0988e; font-style: italic; }
+.book-detail-copy > span, .movie-detail-copy > span, .podcast-detail-copy > span, .article-detail-copy > span { color: #9a8068; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.book-detail h3, .movie-detail h3, .podcast-detail h3, .article-detail h3 { font: normal 30px/1.15 Georgia, serif; margin: 8px 35px 12px 0; }
+.book-detail p, .movie-detail p, .podcast-detail p, .article-detail p { white-space: pre-wrap; color: #655f57; line-height: 1.65; margin: 0 0 12px; }
+.book-detail p.muted, .movie-detail p.muted, .podcast-detail p.muted, .article-detail p.muted { color: #a0988e; font-style: italic; }
 .movie-detail { background: #f4f2ed; border-color: #c9c5bc; border-radius: 10px; box-shadow: inset 10px 0 16px #0000000f, 0 8px 22px #25252229; }
 .ticket-stub { align-self: start; min-height: 135px; display: flex; flex-direction: column; justify-content: center; gap: 8px; border: 1px solid #b9a895; border-left: 6px dotted #c7b7a5; padding: 19px; color: #6d554d; background: #ead9b7; text-align: center; transform: rotate(-1deg); }
 .ticket-stub span { font-size: 8px; font-weight: 800; letter-spacing: .13em; }
@@ -124,6 +139,10 @@ textarea { resize: vertical; }
 .radio-card span { font-size: 10px; font-weight: 900; letter-spacing: .15em; }
 .radio-card strong { font-size: 25px; }
 .radio-card small { font-size: 8px; font-weight: 800; }
+.article-detail { background: #fcfaf3; border-radius: 2px; }
+.press-mark { align-self: start; min-height: 135px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border-block: 3px double #3e3a35; color: #3e3a35; background: #f5f0e4; }
+.press-mark span { font: 10px Georgia, serif; letter-spacing: .2em; }
+.press-mark strong { color: #a64e44; font-size: 30px; }
 .detail-close { position: absolute; right: 16px; top: 13px; border: 0; background: transparent; color: #897d6e; font-size: 22px; }
 .index-nudge { display: flex; align-items: center; gap: 14px; margin-top: 25px; border-top: 1px solid #ddd5c9; padding-top: 20px; color: #766f66; }
 .index-nudge > span { color: #bd8053; }
@@ -152,11 +171,13 @@ footer { text-align: center; color: #aaa296; font-size: 12px; margin: 45px 0 0; 
   .visual-collection { padding: 20px 14px; }
   .shelf-heading { align-items: start; flex-direction: column; gap: 5px; }
   .shelf { margin: 0 -5px; padding-left: 13px; padding-right: 13px; }
-  .book-detail, .movie-detail, .podcast-detail { grid-template-columns: 1fr; gap: 20px; }
+  .book-detail, .movie-detail, .podcast-detail, .article-detail { grid-template-columns: 1fr; gap: 20px; }
   .bookplate { max-width: 190px; }
   .ticket-stub { max-width: 200px; }
   .radio-card { max-width: 200px; }
   .cassette-tray { padding: 18px 12px; }
+  .article-pile { padding: 18px 12px; }
+  .press-mark { max-width: 200px; }
   .index-nudge { align-items: flex-start; flex-wrap: wrap; }
   .index-nudge p { min-width: calc(100% - 40px); }
   .index-nudge button { margin-left: 31px; }

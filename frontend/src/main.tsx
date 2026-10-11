@@ -35,6 +35,7 @@ function App() {
   const [selectedBook, setSelectedBook] = useState<number | null>(null)
   const [selectedMovie, setSelectedMovie] = useState<number | null>(null)
   const [selectedPodcast, setSelectedPodcast] = useState<number | null>(null)
+  const [selectedArticle, setSelectedArticle] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
@@ -97,6 +98,7 @@ function App() {
       if (selectedBook === item.id) setSelectedBook(null)
       if (selectedMovie === item.id) setSelectedMovie(null)
       if (selectedPodcast === item.id) setSelectedPodcast(null)
+      if (selectedArticle === item.id) setSelectedArticle(null)
       await refresh()
       setSuccess('Curiosity deleted.')
       window.setTimeout(() => setSuccess(''), 2500)
@@ -119,10 +121,12 @@ function App() {
   const books = visible.filter(item => item.kind === 'book')
   const movies = visible.filter(item => item.kind === 'movie')
   const podcasts = visible.filter(item => item.kind === 'podcast')
+  const articles = visible.filter(item => item.kind === 'article')
   const selectedBookItem = books.find(book => book.id === selectedBook) || null
   const selectedMovieItem = movies.find(movie => movie.id === selectedMovie) || null
   const selectedPodcastItem = podcasts.find(podcast => podcast.id === selectedPodcast) || null
-  const deferredCount = visible.length - books.length - movies.length - podcasts.length
+  const selectedArticleItem = articles.find(article => article.id === selectedArticle) || null
+  const deferredCount = visible.length - books.length - movies.length - podcasts.length - articles.length
 
   return <main>
     <header>
@@ -195,6 +199,14 @@ function App() {
             </div>
             {selectedPodcastItem && <PodcastDetail item={selectedPodcastItem} onClose={() => setSelectedPodcast(null)} onEdit={edit} onRemove={remove} />}
           </section> : filter === 'podcast' && <CollectionEmpty icon="📻" message="No recordings in the tray yet." action="Add your first podcast" onAction={() => startCapture('podcast')} />)}
+
+          {(filter === 'all' || filter === 'article') && (articles.length > 0 ? <section className="visual-collection article-collection">
+            <div className="shelf-heading press-heading"><div><span>THE READING PILE</span><h3>{normalizedQuery ? `${articles.length} matching ${articles.length === 1 ? 'article' : 'articles'}` : `${articles.length} ${articles.length === 1 ? 'clipping' : 'clippings'}`}</h3></div><p>Saved for a quiet moment.</p></div>
+            <div className="article-pile" aria-label="Article reading pile">
+              {articles.map(article => <ArticleClipping key={article.id} item={article} selected={selectedArticle === article.id} onSelect={() => setSelectedArticle(selectedArticle === article.id ? null : article.id)} />)}
+            </div>
+            {selectedArticleItem && <ArticleDetail item={selectedArticleItem} onClose={() => setSelectedArticle(null)} onEdit={edit} onRemove={remove} />}
+          </section> : filter === 'article' && <CollectionEmpty icon="🗞️" message="The reading pile is empty." action="Save your first article" onAction={() => startCapture('article')} />)}
 
           {deferredCount > 0 && <div className="index-nudge"><span>✦</span><p><strong>{deferredCount} other {deferredCount === 1 ? 'curiosity is' : 'curiosities are'} nearby.</strong> Their visual collections are still taking shape.</p><button type="button" onClick={() => setView('index')}>View in Index</button></div>}
         </div>}
@@ -277,6 +289,25 @@ function PodcastDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClos
     <button type="button" className="detail-close" aria-label="Close podcast details" onClick={onClose}>×</button>
     <div className="radio-card"><span>ASTERISK<br />RADIO</span><strong>◉</strong><small>NOW PLAYING</small></div>
     <div className="podcast-detail-copy"><span>PODCAST · SAVED {new Date(item.created_at).toLocaleDateString()}</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">No listening note yet.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Edit this podcast</button><button onClick={() => void onRemove(item)}>Remove recording</button></div></div>
+  </article>
+}
+
+function ArticleClipping({ item, selected, onSelect }: { item: Item; selected: boolean; onSelect: () => void }) {
+  return <button type="button" className={`article-clipping ${selected ? 'selected' : ''}`} aria-label={`${item.title}, article clipping, added ${new Date(item.created_at).toLocaleDateString()}`} aria-pressed={selected} onClick={onSelect}>
+    <span className="paperclip" aria-hidden="true" />
+    <span className="publication">THE ASTERISK READER <b>·</b> {new Date(item.created_at).toLocaleDateString()}</span>
+    <strong>{item.title}</strong>
+    <span className="article-rule" />
+    <small>{item.note || 'Saved to read and remember.'}</small>
+    <span className="folded-corner" aria-hidden="true" />
+  </button>
+}
+
+function ArticleDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose: () => void; onEdit: (item: Item) => void; onRemove: (item: Item) => void }) {
+  return <article className="article-detail">
+    <button type="button" className="detail-close" aria-label="Close article details" onClick={onClose}>×</button>
+    <div className="press-mark"><span>THE</span><strong>✦</strong><span>READER</span></div>
+    <div className="article-detail-copy"><span>ARTICLE · CLIPPED {new Date(item.created_at).toLocaleDateString()}</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">No margin note yet.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Read original ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Edit this clipping</button><button onClick={() => void onRemove(item)}>Discard clipping</button></div></div>
   </article>
 }
 
