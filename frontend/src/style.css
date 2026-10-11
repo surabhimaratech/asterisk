@@ -61,11 +61,12 @@ textarea { resize: vertical; }
 .item-actions button:hover { text-decoration: underline; }
 
 .room-shell { --floor-line: 31%; position: relative; height: clamp(460px, 62vw, 650px); margin-bottom: 28px; overflow: hidden; border: 1px solid #cfc5b8; border-radius: 18px 18px 7px 7px; background: #ded2c1; box-shadow: 0 18px 35px #49362526; isolation: isolate; }
-.room-glow { position: absolute; z-index: 6; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 28%, #fff8dd73 0 18%, transparent 54%), linear-gradient(90deg, #34291f24, transparent 15% 85%, #34291f24), linear-gradient(0deg, #2f21131f, transparent 30%); }
-.back-wall { position: absolute; z-index: 1; left: 18%; right: 18%; top: 0; bottom: var(--floor-line); background: linear-gradient(#eadfce, #e0d1bd); box-shadow: inset 0 -18px 28px #705a4026; }
+.room-glow { position: absolute; z-index: 6; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 18%, #fff8df42 0 20%, transparent 62%), linear-gradient(90deg, #34291f20, transparent 21% 79%, #34291f20), linear-gradient(0deg, #2f21131a, transparent 30%); }
+.back-wall { position: absolute; z-index: 1; left: 18%; right: 18%; top: 0; bottom: var(--floor-line); background: radial-gradient(ellipse at 50% 12%, #eee4d526 0, transparent 58%), repeating-linear-gradient(90deg, #0000 0 86px, #8b725407 87px, #0000 88px 174px), linear-gradient(#d8cbb8, #d1c1ac); box-shadow: inset 0 -18px 28px #705a4026; }
 .left-wall, .right-wall { position: absolute; z-index: 2; top: 0; bottom: var(--floor-line); width: 25%; overflow: hidden; }
-.left-wall { left: 0; background: linear-gradient(100deg, #87958a, #aab3a7); clip-path: polygon(0 0, 100% 0, 72% 100%, 0 100%); box-shadow: inset -18px 0 30px #3d55491f; }
-.right-wall { right: 0; background: linear-gradient(260deg, #a98478, #c0a297); clip-path: polygon(0 0, 100% 0, 100% 100%, 28% 100%); box-shadow: inset 18px 0 30px #744f451f; }
+.left-wall { left: 0; background: repeating-linear-gradient(100deg, #0000 0 82px, #725b4008 83px, #0000 84px 166px), linear-gradient(100deg, #b9ab97, #d0c2af); clip-path: polygon(0 0, 100% 0, 72% 100%, 0 100%); box-shadow: inset -16px 0 24px #59463116; }
+.right-wall { right: 0; background: repeating-linear-gradient(260deg, #0000 0 82px, #725b4008 83px, #0000 84px 166px), linear-gradient(260deg, #b9ab97, #d0c2af); clip-path: polygon(0 0, 100% 0, 100% 100%, 28% 100%); box-shadow: inset 16px 0 24px #59463116; }
+.back-wall::before, .left-wall::before, .right-wall::before { content: ""; position: absolute; z-index: 4; left: 0; right: 0; top: 0; height: 9px; border-bottom: 2px solid #aa8c68; background: linear-gradient(#75543a, #9a7653 55%, #66472f); box-shadow: 0 3px 7px #4a352230; }
 .back-wall::after, .left-wall::after, .right-wall::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 10px; border-top: 2px solid #a48768; background: linear-gradient(#8d6c50, #684a35); box-shadow: 0 3px 6px #3e2a1c4d; }
 .room-floor { position: absolute; z-index: 0; left: 0; right: 0; bottom: 0; height: var(--floor-line); background: repeating-linear-gradient(100deg, #76563f 0 3px, #957055 3px 47px, #6e4d37 48px 51px); box-shadow: inset 0 18px 25px #3321154f; }
 .room-rug { position: absolute; left: 27%; right: 27%; top: 19%; bottom: 5%; display: grid; place-items: center; border: 8px double #c5a16b; color: #d8bd91; background: #6d3940; clip-path: polygon(12% 0, 88% 0, 100% 100%, 0 100%); }
@@ -83,8 +84,6 @@ textarea { resize: vertical; }
 .room-catalog i { border: 1px solid #55351e; background: #986940; box-shadow: inset 0 -5px #6c4529; }
 .room-catalog b { position: absolute; bottom: 72%; width: 13px; height: 13px; display: grid; place-items: center; border: 1px solid #b6a382; color: #765743; background: #efe4c8; font: 7px Georgia, serif; transform: rotate(-2deg); }
 .room-catalog b:nth-of-type(1) { left: 8%; }.room-catalog b:nth-of-type(2) { left: 26%; }.room-catalog b:nth-of-type(3) { left: 47%; }.room-catalog b:nth-of-type(4) { left: 67%; }.room-catalog b:nth-of-type(5) { left: 82%; }
-.wall-frame { position: absolute; left: 11%; top: 11%; width: 37%; padding: 11px 4px; border: 4px double #d5c7b5; color: #e8e0d2; background: #496259; font: 7px/1.5 Georgia, serif; letter-spacing: .13em; text-align: center; transform: perspective(200px) rotateY(11deg); }
-.right-frame { left: auto; right: 10%; color: #f1dfd6; background: #744c4e; transform: perspective(200px) rotateY(-11deg); }
 .media-console { position: absolute; left: 5%; bottom: 3%; width: 58%; height: 34%; padding: 7px; background: #554233; transform: perspective(300px) rotateY(7deg); transform-origin: left bottom; box-shadow: 4px 7px 10px #25322955; }
 .console-screen { position: relative; height: 45%; border: 3px solid #2f2823; border-radius: 10px; background: #27312f; }
 .mini-movies { position: absolute; inset: auto 8% 8%; display: flex; align-items: end; gap: 2px; }
