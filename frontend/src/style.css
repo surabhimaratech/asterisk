@@ -75,9 +75,9 @@ textarea { resize: vertical; }
 .room-emblem small { display: block; margin-top: 2px; color: #715d49; font: 7px sans-serif; letter-spacing: .24em; }
 .room-bookcase { position: absolute; left: 23%; right: 5%; top: 15%; bottom: 2%; padding: 13px 12px 15px; background: #5a3625; box-shadow: inset 0 0 0 5px #7b5134, 0 8px 15px #3d24186b; }
 .case-top { height: 10px; margin: -18px -18px 7px; border-radius: 4px; background: #4e301e; box-shadow: inset 0 2px #9a704c; }
-.case-bays { height: calc(100% - 27px); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 8px; }
+.case-bays { height: calc(100% - 27px); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(4, 1fr); gap: 6px 8px; }
 .case-bays i { border: 5px solid #53321f; background: linear-gradient(#39271e, #4a3427); box-shadow: inset 0 -7px #795238; }
-.miniature-books { position: absolute; left: 7%; right: 7%; top: 24%; bottom: 13%; display: flex; flex-wrap: wrap; align-content: space-between; gap: 2px; padding: 0 3px; pointer-events: none; }
+.miniature-books { position: absolute; left: 7%; right: 7%; bottom: 71%; height: 38px; display: flex; align-items: flex-end; gap: 2px; padding: 0 3px; pointer-events: none; }
 .miniature-books i { width: clamp(3px, .65vw, 7px); align-self: end; border-radius: 1px 1px 0 0; background: var(--mini-book); box-shadow: inset 1px 0 #fff3; }
 .case-base { height: 13px; margin: 5px -16px -15px; background: #4d2e1c; }
 .room-catalog { position: absolute; left: 48%; right: 22%; bottom: 0; height: 21%; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 5px; background: #7c512f; box-shadow: 0 5px 8px #3d27194a; }
@@ -143,7 +143,7 @@ textarea { resize: vertical; }
 .left-wall { z-index: 4; left: 10%; width: 17%; top: 28%; bottom: var(--floor-line); }
 .media-console { left: 0; bottom: 1%; width: 64%; height: 42%; transform: none; }
 .radio-stand { right: 0; bottom: 1%; width: 34%; height: 35%; }
-.right-wall { z-index: 3; right: 8%; top: 17%; bottom: var(--floor-line); width: 28%; border-left: 8px solid #4c2d1d; border-radius: 3px; background: repeating-linear-gradient(0deg, #4a2d20 0 8px, transparent 8px 66px), linear-gradient(260deg, #4c3327, #72503a 58%, #563929); box-shadow: inset 18px 0 25px #29170e4d, 8px 10px 14px #3d24184d; transform: perspective(650px) rotateY(-7deg); transform-origin: left bottom; }
+.right-wall { z-index: 3; right: 8%; top: 17%; bottom: var(--floor-line); width: 28%; border-left: 8px solid #4c2d1d; border-radius: 3px; background: repeating-linear-gradient(0deg, #4a2d20 0 8px, transparent 8px 50px), linear-gradient(260deg, #4c3327, #72503a 58%, #563929); box-shadow: inset 18px 0 25px #29170e4d, 8px 10px 14px #3d24184d; transform: perspective(650px) rotateY(-7deg); transform-origin: left bottom; }
 .right-wall::before { height: 12px; }.right-wall::after { height: 12px; }
 .room-floor { left: 8%; right: 7%; height: 30%; bottom: 1%; background: linear-gradient(135deg, #725039, #936c4e 58%, #684630); clip-path: polygon(4% 0, 89% 0, 100% 78%, 47% 100%, 0 67%); box-shadow: inset 0 12px 18px #33211542, 0 10px 13px #3c291b3d; }
 .room-rug { left: 18%; right: 15%; top: 8%; bottom: 13%; border-color: #c7a56f; color: #d8bd91; background: repeating-linear-gradient(45deg, #743f3c 0 13px, #7e4742 13px 26px); clip-path: polygon(7% 0, 91% 0, 100% 77%, 48% 100%, 0 69%); }
