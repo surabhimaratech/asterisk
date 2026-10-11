@@ -38,6 +38,7 @@ function App() {
   const [selectedArticle, setSelectedArticle] = useState<number | null>(null)
   const [selectedConcept, setSelectedConcept] = useState<number | null>(null)
   const [selectedQuestion, setSelectedQuestion] = useState<number | null>(null)
+  const [selectedThought, setSelectedThought] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
@@ -103,6 +104,7 @@ function App() {
       if (selectedArticle === item.id) setSelectedArticle(null)
       if (selectedConcept === item.id) setSelectedConcept(null)
       if (selectedQuestion === item.id) setSelectedQuestion(null)
+      if (selectedThought === item.id) setSelectedThought(null)
       await refresh()
       setSuccess('Curiosity deleted.')
       window.setTimeout(() => setSuccess(''), 2500)
@@ -128,13 +130,15 @@ function App() {
   const articles = visible.filter(item => item.kind === 'article')
   const concepts = visible.filter(item => item.kind === 'concept')
   const questions = visible.filter(item => item.kind === 'question')
+  const thoughts = visible.filter(item => item.kind === 'thought')
   const selectedBookItem = books.find(book => book.id === selectedBook) || null
   const selectedMovieItem = movies.find(movie => movie.id === selectedMovie) || null
   const selectedPodcastItem = podcasts.find(podcast => podcast.id === selectedPodcast) || null
   const selectedArticleItem = articles.find(article => article.id === selectedArticle) || null
   const selectedConceptItem = concepts.find(concept => concept.id === selectedConcept) || null
   const selectedQuestionItem = questions.find(question => question.id === selectedQuestion) || null
-  const deferredCount = visible.length - books.length - movies.length - podcasts.length - articles.length - concepts.length - questions.length
+  const selectedThoughtItem = thoughts.find(thought => thought.id === selectedThought) || null
+  const deferredCount = visible.length - books.length - movies.length - podcasts.length - articles.length - concepts.length - questions.length - thoughts.length
 
   return <main>
     <header>
@@ -231,6 +235,14 @@ function App() {
             </div><div className="box-label">FRAGILE · IDEAS INSIDE · ✦</div></div>
             {selectedQuestionItem && <QuestionDetail item={selectedQuestionItem} onClose={() => setSelectedQuestion(null)} onEdit={edit} onRemove={remove} />}
           </section> : filter === 'question' && <CollectionEmpty icon="💡" message="The question box is waiting." action="Ask your first question" onAction={() => startCapture('question')} />)}
+
+          {(filter === 'all' || filter === 'thought') && (thoughts.length > 0 ? <section className="visual-collection thought-collection">
+            <div className="shelf-heading thought-heading"><div><span>ODDS & ENDS</span><h3>{normalizedQuery ? `${thoughts.length} matching ${thoughts.length === 1 ? 'thought' : 'thoughts'}` : `${thoughts.length} ${thoughts.length === 1 ? 'scrap' : 'scraps'}`}</h3></div><p>Nothing is too small to keep.</p></div>
+            <div className="thought-pocket" aria-label="Random thought scraps"><div className="thought-scraps">
+              {thoughts.map(thought => <ThoughtScrap key={thought.id} item={thought} selected={selectedThought === thought.id} onSelect={() => setSelectedThought(selectedThought === thought.id ? null : thought.id)} />)}
+            </div><div className="pocket-front"><span>LOOSE THOUGHTS</span><small>✦ KEEP FOR LATER</small></div></div>
+            {selectedThoughtItem && <ThoughtDetail item={selectedThoughtItem} onClose={() => setSelectedThought(null)} onEdit={edit} onRemove={remove} />}
+          </section> : filter === 'thought' && <CollectionEmpty icon="📝" message="No loose thoughts tucked away yet." action="Capture a passing thought" onAction={() => startCapture('thought')} />)}
 
           {deferredCount > 0 && <div className="index-nudge"><span>✦</span><p><strong>{deferredCount} other {deferredCount === 1 ? 'curiosity is' : 'curiosities are'} nearby.</strong> Their visual collections are still taking shape.</p><button type="button" onClick={() => setView('index')}>View in Index</button></div>}
         </div>}
@@ -364,6 +376,21 @@ function QuestionDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClo
     <button type="button" className="detail-close" aria-label="Close question details" onClick={onClose}>×</button>
     <div className="inquiry-mark"><span>?</span><small>STILL<br />WONDERING</small></div>
     <div className="question-detail-copy"><span>QUESTION · ASKED {new Date(item.created_at).toLocaleDateString()}</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">No clues gathered yet.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Follow the clue ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Refine this question</button><button onClick={() => void onRemove(item)}>Remove from box</button></div></div>
+  </article>
+}
+
+function ThoughtScrap({ item, selected, onSelect }: { item: Item; selected: boolean; onSelect: () => void }) {
+  const scrapStyle = item.id % 3
+  return <button type="button" className={`thought-scrap scrap-${scrapStyle} ${selected ? 'selected' : ''}`} aria-label={`${item.title}, random thought scrap, added ${new Date(item.created_at).toLocaleDateString()}`} aria-pressed={selected} onClick={onSelect}>
+    <span className="scrap-pin" aria-hidden="true">✦</span><strong>{item.title}</strong>{item.note && <small>{item.note}</small>}<span className="scrap-date">{new Date(item.created_at).toLocaleDateString()}</span>
+  </button>
+}
+
+function ThoughtDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose: () => void; onEdit: (item: Item) => void; onRemove: (item: Item) => void }) {
+  return <article className="thought-detail">
+    <button type="button" className="detail-close" aria-label="Close thought details" onClick={onClose}>×</button>
+    <div className="thought-mark"><span>✦</span><strong>NOTE<br />TO SELF</strong><small>{new Date(item.created_at).toLocaleDateString()}</small></div>
+    <div className="thought-detail-copy"><span>RANDOM THOUGHT · TUCKED AWAY</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">The thought speaks for itself.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Follow this thread ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Edit this thought</button><button onClick={() => void onRemove(item)}>Discard scrap</button></div></div>
   </article>
 }
 

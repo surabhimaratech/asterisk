@@ -55,7 +55,7 @@ textarea { resize: vertical; }
 .date { font-size: 11px; color: #9a9287; }
 .item h3 { font: normal 23px Georgia, serif; margin: 17px 0 6px; overflow-wrap: anywhere; }
 .item p { color: #716b64; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.item a, .book-detail a, .movie-detail a, .podcast-detail a, .article-detail a, .concept-detail a, .question-detail a { color: #586f5d; font-size: 13px; }
+.item a, .book-detail a, .movie-detail a, .podcast-detail a, .article-detail a, .concept-detail a, .question-detail a, .thought-detail a { color: #586f5d; font-size: 13px; }
 .item-actions { display: flex; gap: 16px; margin-top: auto; padding-top: 24px; }
 .item-actions button { border: 0; background: transparent; color: #777067; font-size: 12px; padding: 0; }
 .item-actions button:hover { text-decoration: underline; }
@@ -150,14 +150,31 @@ textarea { resize: vertical; }
 .question-bulb > small { margin-top: auto; color: #705d42; font-size: 7px; letter-spacing: .15em; }
 .box-label { width: max-content; max-width: 90%; margin: 19px auto 0; padding: 5px 18px; border: 1px solid #795a34; color: #eed9b1; background: #80603b; font-size: 8px; font-weight: 800; letter-spacing: .16em; text-align: center; }
 
-.book-detail, .movie-detail, .podcast-detail, .article-detail, .concept-detail, .question-detail { position: relative; margin-top: 25px; display: grid; grid-template-columns: 170px 1fr; gap: 28px; background: #fffdf7; border: 1px solid #d9cebc; border-radius: 5px 13px 13px 5px; padding: 28px; box-shadow: inset 13px 0 18px #8a68431a, 0 8px 22px #5b463322; animation: reveal-book .2s ease-out; }
+.thought-collection { background: #ede9e4; border-color: #d8d0c8; }
+.thought-heading span { color: #8c5c68; }
+.thought-pocket { position: relative; padding: 31px 25px 0; border-radius: 8px; background: #d9c9b7; box-shadow: inset 0 8px 17px #59483635; overflow: hidden; }
+.thought-scraps { min-height: 235px; display: flex; align-items: end; justify-content: center; flex-wrap: wrap; gap: 0; padding: 10px 15px 0; }
+.thought-scrap { position: relative; width: 205px; min-height: 170px; display: flex; flex-direction: column; padding: 28px 23px 20px; border: 0; color: #423c36; background: #fff8cf; text-align: left; box-shadow: 2px 4px 8px #4f40334a; clip-path: polygon(2% 1%, 98% 0, 100% 96%, 73% 98%, 45% 96%, 20% 100%, 0 96%); transition: transform .18s ease, z-index .01s; }
+.thought-scrap.scrap-0 { transform: rotate(-4deg); background: #fff0bd; }
+.thought-scrap.scrap-1 { transform: rotate(2.5deg); margin-left: -20px; background: #e4f0e2; }
+.thought-scrap.scrap-2 { transform: rotate(-1deg); margin-left: -17px; background: #f3dfdf; }
+.thought-scrap:hover, .thought-scrap:focus-visible, .thought-scrap.selected { z-index: 3; transform: translateY(-13px) rotate(0); outline: 3px solid #fff; outline-offset: 2px; }
+.scrap-pin { position: absolute; top: 8px; left: 50%; color: #b47a56; font-size: 10px; }
+.thought-scrap > strong { font: 20px/1.08 Georgia, serif; }
+.thought-scrap > small { display: -webkit-box; margin-top: 12px; color: #70675e; font: 11px/1.5 Georgia, serif; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; }
+.scrap-date { margin-top: auto; padding-top: 12px; color: #96897e; font-size: 8px; font-style: italic; }
+.pocket-front { position: relative; z-index: 4; min-height: 74px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; margin: -19px -25px 0; border-top: 2px solid #8b7560; color: #69594b; background: linear-gradient(#c4aa8e, #b99b7c); box-shadow: 0 -7px 12px #59412b45; }
+.pocket-front span { font: 14px Georgia, serif; letter-spacing: .14em; }
+.pocket-front small { font-size: 7px; letter-spacing: .14em; }
+
+.book-detail, .movie-detail, .podcast-detail, .article-detail, .concept-detail, .question-detail, .thought-detail { position: relative; margin-top: 25px; display: grid; grid-template-columns: 170px 1fr; gap: 28px; background: #fffdf7; border: 1px solid #d9cebc; border-radius: 5px 13px 13px 5px; padding: 28px; box-shadow: inset 13px 0 18px #8a68431a, 0 8px 22px #5b463322; animation: reveal-book .2s ease-out; }
 @keyframes reveal-book { from { opacity: 0; transform: translateY(-8px); } }
 .bookplate { align-self: start; border: 1px solid #b9a991; outline: 3px double #cbbca6; outline-offset: -7px; padding: 25px 12px; text-align: center; color: #81715e; font: 9px/1.8 Georgia, serif; letter-spacing: .14em; }
 .bookplate strong { font-size: 14px; color: #5c4c3b; }
-.book-detail-copy > span, .movie-detail-copy > span, .podcast-detail-copy > span, .article-detail-copy > span, .concept-detail-copy > span, .question-detail-copy > span { color: #9a8068; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
-.book-detail h3, .movie-detail h3, .podcast-detail h3, .article-detail h3, .concept-detail h3, .question-detail h3 { font: normal 30px/1.15 Georgia, serif; margin: 8px 35px 12px 0; }
-.book-detail p, .movie-detail p, .podcast-detail p, .article-detail p, .concept-detail p, .question-detail p { white-space: pre-wrap; color: #655f57; line-height: 1.65; margin: 0 0 12px; }
-.book-detail p.muted, .movie-detail p.muted, .podcast-detail p.muted, .article-detail p.muted, .concept-detail p.muted, .question-detail p.muted { color: #a0988e; font-style: italic; }
+.book-detail-copy > span, .movie-detail-copy > span, .podcast-detail-copy > span, .article-detail-copy > span, .concept-detail-copy > span, .question-detail-copy > span, .thought-detail-copy > span { color: #9a8068; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.book-detail h3, .movie-detail h3, .podcast-detail h3, .article-detail h3, .concept-detail h3, .question-detail h3, .thought-detail h3 { font: normal 30px/1.15 Georgia, serif; margin: 8px 35px 12px 0; }
+.book-detail p, .movie-detail p, .podcast-detail p, .article-detail p, .concept-detail p, .question-detail p, .thought-detail p { white-space: pre-wrap; color: #655f57; line-height: 1.65; margin: 0 0 12px; }
+.book-detail p.muted, .movie-detail p.muted, .podcast-detail p.muted, .article-detail p.muted, .concept-detail p.muted, .question-detail p.muted, .thought-detail p.muted { color: #a0988e; font-style: italic; }
 .movie-detail { background: #f4f2ed; border-color: #c9c5bc; border-radius: 10px; box-shadow: inset 10px 0 16px #0000000f, 0 8px 22px #25252229; }
 .ticket-stub { align-self: start; min-height: 135px; display: flex; flex-direction: column; justify-content: center; gap: 8px; border: 1px solid #b9a895; border-left: 6px dotted #c7b7a5; padding: 19px; color: #6d554d; background: #ead9b7; text-align: center; transform: rotate(-1deg); }
 .ticket-stub span { font-size: 8px; font-weight: 800; letter-spacing: .13em; }
@@ -180,6 +197,11 @@ textarea { resize: vertical; }
 .inquiry-mark { align-self: start; min-height: 135px; display: flex; align-items: center; justify-content: center; gap: 12px; border: 1px solid #c0a960; color: #725e24; background: radial-gradient(circle at 30% 25%, #fff, transparent 12%), #f0df8c; box-shadow: 0 0 22px #ffe97c66; }
 .inquiry-mark span { font: 54px Georgia, serif; }
 .inquiry-mark small { font-size: 8px; font-weight: 900; letter-spacing: .12em; }
+.thought-detail { background: #fffaf0; border-color: #d9c6ae; transform: rotate(-.15deg); }
+.thought-mark { align-self: start; min-height: 135px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #6f5046; background: #f2dfad; box-shadow: 3px 4px 0 #d1b77e; transform: rotate(-2deg); }
+.thought-mark span { color: #b47751; }
+.thought-mark strong { font: 17px/1.1 Georgia, serif; text-align: center; }
+.thought-mark small { font-size: 8px; }
 .detail-close { position: absolute; right: 16px; top: 13px; border: 0; background: transparent; color: #897d6e; font-size: 22px; }
 .index-nudge { display: flex; align-items: center; gap: 14px; margin-top: 25px; border-top: 1px solid #ddd5c9; padding-top: 20px; color: #766f66; }
 .index-nudge > span { color: #bd8053; }
@@ -208,7 +230,7 @@ footer { text-align: center; color: #aaa296; font-size: 12px; margin: 45px 0 0; 
   .visual-collection { padding: 20px 14px; }
   .shelf-heading { align-items: start; flex-direction: column; gap: 5px; }
   .shelf { margin: 0 -5px; padding-left: 13px; padding-right: 13px; }
-  .book-detail, .movie-detail, .podcast-detail, .article-detail, .concept-detail, .question-detail { grid-template-columns: 1fr; gap: 20px; }
+  .book-detail, .movie-detail, .podcast-detail, .article-detail, .concept-detail, .question-detail, .thought-detail { grid-template-columns: 1fr; gap: 20px; }
   .bookplate { max-width: 190px; }
   .ticket-stub { max-width: 200px; }
   .radio-card { max-width: 200px; }
@@ -219,6 +241,9 @@ footer { text-align: center; color: #aaa296; font-size: 12px; margin: 45px 0 0; 
   .catalog-label { max-width: 200px; }
   .question-box { padding-inline: 12px; }
   .inquiry-mark { max-width: 200px; }
+  .thought-pocket { padding-inline: 10px; }
+  .thought-scraps { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; }
+  .thought-mark { max-width: 200px; }
   .index-nudge { align-items: flex-start; flex-wrap: wrap; }
   .index-nudge p { min-width: calc(100% - 40px); }
   .index-nudge button { margin-left: 31px; }
