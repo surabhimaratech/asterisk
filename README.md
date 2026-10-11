@@ -40,7 +40,7 @@ cd frontend
 npm run dev
 ```
 
-The frontend proxies `/api` requests to the backend. Data persists at `backend/data/asterisk.db`, using an absolute path derived from the application location rather than the terminal's working directory. Asterisk creates the data directory automatically, and `*.db` files are excluded from git. The library works without a cloud service; AI features require an OpenAI API key.
+The frontend proxies `/api` requests to the backend. Data persists at `backend/data/asterisk.db`, using an absolute path derived from the application location rather than the terminal's working directory. Asterisk creates the data directory automatically, and `*.db` files are excluded from git. The library works without a cloud service; AI features require an OpenRouter API key.
 
 If an earlier installation has `backend/curiosity.db`, Asterisk copies it to the new location on first startup when `backend/data/asterisk.db` does not yet exist. The original file is left untouched.
 
@@ -62,17 +62,17 @@ Item kinds: `book`, `movie`, `podcast`, `article`, `concept`, `question`, and `t
 
 ## Configure AI features
 
-Asterisk uses the OpenAI Responses API with Structured Outputs. Copy the example configuration, edit in your API key, and export it in the shell that starts Asterisk:
+Asterisk uses OpenRouter's OpenAI-compatible API with Structured Outputs. Copy the example configuration and paste your API key into the local `.env` file:
 
 ```bash
 cp .env.example .env
-set -a
-source .env
-set +a
+# Edit .env and replace your_api_key_here.
 ./scripts/dev.sh
 ```
 
-`OPENAI_API_KEY` is required. `OPENAI_MODEL` defaults to `gpt-6-astra`, and `OPENAI_TIMEOUT_SECONDS` defaults to `30`.
+`scripts/dev.sh` loads the root `.env` automatically. The file is ignored by Git; never paste the key into `.env.example`, frontend code, or another tracked file.
+
+`OPENROUTER_API_KEY` is required. `OPENROUTER_MODEL` defaults to `openai/gpt-4o-mini`, and `OPENROUTER_TIMEOUT_SECONDS` defaults to `30`. Choose a model whose OpenRouter page lists structured-output support.
 
 Concept extraction is always user-triggered. Re-extraction replaces earlier AI suggestions but preserves manually added concepts. Asterisk sends the selected item's type, title, note, and URL string to the configured provider; it does not retrieve the URL or claim to have read its content.
 

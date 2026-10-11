@@ -176,11 +176,11 @@ def test_extraction_provider_error(client: TestClient) -> None:
 
 
 def test_extraction_missing_credentials(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     item_id = create_item(client).json()["id"]
     response = client.post(f"/api/items/{item_id}/concepts/extract")
     assert response.status_code == 503
-    assert "OPENAI_API_KEY" in response.json()["detail"]
+    assert "OPENROUTER_API_KEY" in response.json()["detail"]
 
 
 def test_sidequest_generation_and_persistence(client: TestClient) -> None:

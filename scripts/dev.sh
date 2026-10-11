@@ -3,6 +3,13 @@ set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+if [[ -f "$project_dir/.env" ]]; then
+  set -a
+  # This local file is gitignored and is the supported place for API credentials.
+  source "$project_dir/.env"
+  set +a
+fi
+
 if [[ ! -x "$project_dir/backend/.venv/bin/uvicorn" ]]; then
   echo "Backend dependencies are missing. Follow the one-time setup in README.md."
   exit 1

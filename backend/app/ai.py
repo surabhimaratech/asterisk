@@ -67,30 +67,30 @@ class CritiquedConnection(BaseModel):
     evidence_status: str
 
 
-class OpenAIClient:
+class OpenRouterClient:
     def __init__(self) -> None:
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.model = os.getenv("OPENAI_MODEL", "gpt-6-astra")
-        self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-        self.timeout = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
+        self.api_key = os.getenv("OPENROUTER_API_KEY")
+        self.model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+        self.base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+        self.timeout = float(os.getenv("OPENROUTER_TIMEOUT_SECONDS", "30"))
 
     def _structured(self, system: str, user: str, schema: type[BaseModel], name: str, max_tokens: int) -> BaseModel:
         if not self.api_key:
-            raise AIConfigurationError("OPENAI_API_KEY is not configured. Add it to your environment and restart Asterisk.")
+            raise AIConfigurationError("OPENROUTER_API_KEY is not configured. Add it to your local .env file and restart Asterisk.")
         payload = {
             "model": self.model,
-            "store": False,
-            "input": [
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "text": {"format": {"type": "json_schema", "name": name, "schema": schema.model_json_schema(), "strict": True}},
-            "max_output_tokens": max_tokens,
+            "response_format": {"type": "json_schema", "json_schema": {"name": name, "schema": schema.model_json_schema(), "strict": True}},
+            "provider": {"require_parameters": True},
+            "max_tokens": max_tokens,
         }
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(
-                    f"{self.base_url}/responses",
+                    f"{self.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
                     json=payload,
                 )
@@ -104,12 +104,7 @@ class OpenAIClient:
             raise AIProviderError(f"The AI provider returned an error ({response.status_code}).")
         try:
             body = response.json()
-            text = next(
-                content["text"]
-                for output in body.get("output", [])
-                for content in output.get("content", [])
-                if content.get("type") == "output_text"
-            )
+            text = body["choices"][0]["message"]["content"]
             return schema.model_validate(json.loads(text))
         except (KeyError, StopIteration, ValueError, TypeError) as exc:
             raise AIProviderError("The AI provider returned an invalid structured response.") from exc
@@ -124,5 +119,5 @@ class OpenAIClient:
         return self._structured(CRITIQUE_SYSTEM_PROMPT, critique_input(candidates), CritiquedConnection, "sidequest_critique", 1400)  # type: ignore[return-value]
 
 
-def get_ai_client() -> OpenAIClient:
-    return OpenAIClient()
+def get_ai_client() -> OpenRouterClient:
+    return OpenRouterClient()

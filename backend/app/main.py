@@ -11,7 +11,7 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, fiel
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, delete, select, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from .ai import AIConfigurationError, AIProviderError, OpenAIClient, get_ai_client
+from .ai import AIConfigurationError, AIProviderError, OpenRouterClient, get_ai_client
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BACKEND_DIR / "data"
@@ -220,7 +220,7 @@ def delete_concept(concept_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 @app.post("/api/items/{item_id}/concepts/extract", response_model=list[ConceptRead])
-def extract_concepts(item_id: int, db: Session = Depends(get_db), ai: OpenAIClient = Depends(get_ai_client)):
+def extract_concepts(item_id: int, db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client)):
     item = db.get(CuriosityItem, item_id)
     if item is None:
         raise HTTPException(404, "Item not found")
@@ -240,7 +240,7 @@ def list_sidequests(db: Session = Depends(get_db)):
     return [sidequest_read(sidequest, db) for sidequest in saved]
 
 @app.post("/api/sidequests/surprise", response_model=SidequestRead, status_code=201)
-def surprise_me(db: Session = Depends(get_db), ai: OpenAIClient = Depends(get_ai_client)):
+def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client)):
     items = db.scalars(select(CuriosityItem).order_by(CuriosityItem.id)).all()
     concepts = db.scalars(select(ItemConcept).order_by(ItemConcept.item_id, ItemConcept.id)).all()
     by_item: dict[int, list[ItemConcept]] = {}
