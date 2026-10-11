@@ -103,11 +103,11 @@ textarea { resize: vertical; }
 .mini-thoughts { position: absolute; z-index: 2; right: 4%; top: -25%; display: flex; gap: 3px; }
 .mini-thoughts i { width: 17px; height: 16px; display: grid; place-items: center; color: #ae7955; background: #f5e7a8; font: 5px sans-serif; box-shadow: 1px 1px 2px #4e382b44; transform: rotate(5deg); }
 .mini-thoughts i:nth-child(2n) { background: #d6e5d3; transform: rotate(-4deg); }
-.desk-top { height: 12%; border-radius: 3px; background: #694633; box-shadow: inset 0 2px #9e7358; }
-.desk-drawers { width: 44%; height: 45%; margin-left: 48%; display: grid; gap: 2px; padding: 3px; background: #6f4c39; }
-.desk-drawers i { border: 1px solid #493124; background: #87614a; }
+.desk-top { height: 12%; border-radius: 3px; background: #526052; box-shadow: inset 0 2px #82907a, 0 3px 5px #2f251d55; }
+.desk-drawers { width: 44%; height: 45%; margin-left: 48%; display: grid; gap: 2px; padding: 3px; background: #4c594b; }
+.desk-drawers i { border: 1px solid #354035; background: #6d7866; }
 .desk-legs { position: absolute; inset: 12% 8% 0; display: flex; justify-content: space-between; }
-.desk-legs i { width: 8%; background: #523727; }
+.desk-legs i { width: 8%; background: #3f4b40; }
 .question-crate { position: absolute; left: 7%; bottom: 2%; width: 29%; height: 21%; border: 5px solid #806442; background: #b08d5c; box-shadow: inset 0 8px #765735; transform: perspective(250px) rotateY(-6deg); }
 .mini-bulbs { position: absolute; left: 5%; right: 5%; bottom: 33%; display: flex; justify-content: space-around; }
 .mini-bulbs i { width: 17px; height: 17px; display: grid; place-items: center; border: 1px solid #ad974f; border-radius: 50%; color: #766425; background: radial-gradient(circle at 35% 30%, #fff 0 12%, #e7d66d 15% 70%, #b59e43); font: 10px Georgia, serif; box-shadow: 0 0 6px #ffe875aa; }
