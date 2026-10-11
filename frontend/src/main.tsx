@@ -34,6 +34,7 @@ function App() {
   const [view, setView] = useState<ViewMode>(() => localStorage.getItem('asterisk-view') === 'index' ? 'index' : 'library')
   const [selectedBook, setSelectedBook] = useState<number | null>(null)
   const [selectedMovie, setSelectedMovie] = useState<number | null>(null)
+  const [selectedPodcast, setSelectedPodcast] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
@@ -95,6 +96,7 @@ function App() {
       if (editing === item.id) { setEditing(null); setForm(empty) }
       if (selectedBook === item.id) setSelectedBook(null)
       if (selectedMovie === item.id) setSelectedMovie(null)
+      if (selectedPodcast === item.id) setSelectedPodcast(null)
       await refresh()
       setSuccess('Curiosity deleted.')
       window.setTimeout(() => setSuccess(''), 2500)
@@ -116,9 +118,11 @@ function App() {
   )
   const books = visible.filter(item => item.kind === 'book')
   const movies = visible.filter(item => item.kind === 'movie')
+  const podcasts = visible.filter(item => item.kind === 'podcast')
   const selectedBookItem = books.find(book => book.id === selectedBook) || null
   const selectedMovieItem = movies.find(movie => movie.id === selectedMovie) || null
-  const deferredCount = visible.length - books.length - movies.length
+  const selectedPodcastItem = podcasts.find(podcast => podcast.id === selectedPodcast) || null
+  const deferredCount = visible.length - books.length - movies.length - podcasts.length
 
   return <main>
     <header>
@@ -184,6 +188,14 @@ function App() {
             {selectedMovieItem && <MovieDetail item={selectedMovieItem} onClose={() => setSelectedMovie(null)} onEdit={edit} onRemove={remove} />}
           </section> : filter === 'movie' && <CollectionEmpty icon="🎞️" message="No movies on this shelf yet." action="Add your first movie" onAction={() => startCapture('movie')} />)}
 
+          {(filter === 'all' || filter === 'podcast') && (podcasts.length > 0 ? <section className="visual-collection podcast-collection">
+            <div className="shelf-heading radio-heading"><div><span>ON THE AIR</span><h3>{normalizedQuery ? `${podcasts.length} matching ${podcasts.length === 1 ? 'show' : 'shows'}` : `${podcasts.length} ${podcasts.length === 1 ? 'recording' : 'recordings'}`}</h3></div><p>Press play on something worth hearing.</p></div>
+            <div className="cassette-tray" aria-label="Podcast cassette collection">
+              {podcasts.map(podcast => <PodcastCassette key={podcast.id} item={podcast} selected={selectedPodcast === podcast.id} onSelect={() => setSelectedPodcast(selectedPodcast === podcast.id ? null : podcast.id)} />)}
+            </div>
+            {selectedPodcastItem && <PodcastDetail item={selectedPodcastItem} onClose={() => setSelectedPodcast(null)} onEdit={edit} onRemove={remove} />}
+          </section> : filter === 'podcast' && <CollectionEmpty icon="📻" message="No recordings in the tray yet." action="Add your first podcast" onAction={() => startCapture('podcast')} />)}
+
           {deferredCount > 0 && <div className="index-nudge"><span>✦</span><p><strong>{deferredCount} other {deferredCount === 1 ? 'curiosity is' : 'curiosities are'} nearby.</strong> Their visual collections are still taking shape.</p><button type="button" onClick={() => setView('index')}>View in Index</button></div>}
         </div>}
     </section>
@@ -248,6 +260,23 @@ function MovieDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose:
       {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}
       <div className="item-actions"><button onClick={() => onEdit(item)}>Edit this movie</button><button onClick={() => void onRemove(item)}>Remove from shelf</button></div>
     </div>
+  </article>
+}
+
+function PodcastCassette({ item, selected, onSelect }: { item: Item; selected: boolean; onSelect: () => void }) {
+  const palette = coverPalettes[(item.id + 3) % coverPalettes.length]
+  return <button type="button" className={`cassette ${selected ? 'selected' : ''}`} style={{ '--tape-color': palette[0], '--tape-ink': palette[1] } as React.CSSProperties} aria-label={`${item.title}, podcast cassette, added ${new Date(item.created_at).toLocaleDateString()}`} aria-pressed={selected} onClick={onSelect}>
+    <span className="cassette-label"><small>ASTERISK RADIO · EP {String(item.id).padStart(2, '0')}</small><strong>{item.title}</strong></span>
+    <span className="tape-window" aria-hidden="true"><i /><b>60</b><i /></span>
+    <span className="cassette-notches" aria-hidden="true">● &nbsp; ● &nbsp; ●</span>
+  </button>
+}
+
+function PodcastDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose: () => void; onEdit: (item: Item) => void; onRemove: (item: Item) => void }) {
+  return <article className="podcast-detail">
+    <button type="button" className="detail-close" aria-label="Close podcast details" onClick={onClose}>×</button>
+    <div className="radio-card"><span>ASTERISK<br />RADIO</span><strong>◉</strong><small>NOW PLAYING</small></div>
+    <div className="podcast-detail-copy"><span>PODCAST · SAVED {new Date(item.created_at).toLocaleDateString()}</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">No listening note yet.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Edit this podcast</button><button onClick={() => void onRemove(item)}>Remove recording</button></div></div>
   </article>
 }
 
