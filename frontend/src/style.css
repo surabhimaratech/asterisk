@@ -155,13 +155,6 @@ textarea { resize: vertical; }
 .plant-left { z-index: 6; left: 20%; bottom: 23%; transform: scale(.95); }.plant-right { z-index: 6; right: 4%; bottom: 21%; transform: scale(1.2); }
 .floor-lamp { left: 5%; bottom: 24%; }
 .room-catalog { left: 45%; right: 20%; }
-.zone-book { left: 13%; top: 15%; width: 53%; height: 48%; }
-.zone-movie { left: 8%; top: 45%; width: 10%; height: 20%; }
-.zone-podcast { left: 17%; top: 48%; width: 9%; height: 18%; }
-.zone-concept { left: 35%; top: 50%; width: 20%; height: 17%; }
-.zone-article { right: 10%; top: 41%; width: 17%; height: 14%; }
-.zone-question { right: 4%; top: 54%; width: 12%; height: 14%; }
-.zone-thought { right: 5%; top: 28%; width: 19%; height: 14%; }
 .door-threshold { position: absolute; z-index: 7; left: 0; right: 0; bottom: 0; height: 26px; display: grid; place-items: center; border-top: 5px solid #4b3022; color: #d9c5a9; background: #38251c; font-size: 7px; letter-spacing: .23em; }
 .room-zone { position: absolute; z-index: 8; border: 1px solid transparent; color: #fff; background: transparent; border-radius: 9px; transition: background .2s ease, box-shadow .2s ease, opacity .2s ease; }
 .room-zone span { position: absolute; left: 50%; bottom: 9px; transform: translateX(-50%) translateY(5px); padding: 5px 8px; border-radius: 10px; color: #f8f1e6; background: #30261dcc; font-size: 8px; letter-spacing: .08em; white-space: nowrap; opacity: 0; transition: opacity .18s ease, transform .18s ease; }
@@ -170,13 +163,13 @@ textarea { resize: vertical; }
 .room-zone:hover span, .room-zone:focus-visible span, .room-zone.active span { opacity: 1; transform: translateX(-50%) translateY(0); }
 .room-zone:hover b, .room-zone:focus-visible b, .room-zone.active b, .room-shell.searching .room-zone b { opacity: 1; }
 .room-zone.no-match { opacity: .28; }
-.zone-book { left: 17%; top: 13%; width: 52%; height: 52%; }
-.zone-movie { left: 1%; top: 42%; width: 12%; height: 25%; }
-.zone-podcast { left: 12%; top: 47%; width: 9%; height: 20%; }
-.zone-article { right: 10%; top: 42%; width: 17%; height: 14%; }
-.zone-concept { left: 35%; top: 51%; width: 20%; height: 18%; }
-.zone-question { right: 1%; top: 56%; width: 11%; height: 14%; }
-.zone-thought { right: 3%; top: 30%; width: 19%; height: 14%; }
+.zone-book { left: 12%; top: 14%; width: 52%; height: 58%; }
+.zone-movie { left: 10%; top: 53%; width: 11%; height: 18%; }
+.zone-podcast { left: 21%; top: 56%; width: 6%; height: 15%; }
+.zone-article { left: 74%; top: 47%; width: 18%; height: 24%; }
+.zone-concept { left: 34%; top: 59%; width: 20%; height: 13%; }
+.zone-question { left: 67%; top: 59%; width: 8%; height: 12%; }
+.zone-thought { left: 88%; top: 44%; width: 7%; height: 11%; }
 .room-shell.searching .mini-object { transition: opacity .2s ease, filter .2s ease, box-shadow .2s ease; }
 .room-shell.searching .mini-object.nonmatch { opacity: .15; filter: grayscale(1); }
 .room-shell.searching .mini-object.match { filter: brightness(1.2); box-shadow: 0 0 8px #fff1a8; }
