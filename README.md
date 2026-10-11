@@ -2,7 +2,7 @@
 
 **There's more to the story.**
 
-A personal Curiosity Library for quickly capturing books, movies, podcasts, articles, concepts, questions, and random thoughts. Future AI-powered discovery will surface unexpected, meaningful connections across your interests through **Sidequests**.
+A personal Curiosity Library for quickly capturing books, movies, podcasts, articles, concepts, questions, and random thoughts. AI-assisted concept exploration and experimental **Sidequests** surface unexpected bridges across your interests.
 
 ## Requirements
 - Python 3.10+
@@ -40,7 +40,7 @@ cd frontend
 npm run dev
 ```
 
-The frontend proxies `/api` requests to the backend. Data persists at `backend/data/asterisk.db`, using an absolute path derived from the application location rather than the terminal's working directory. Asterisk creates the data directory automatically, and `*.db` files are excluded from git. No accounts or cloud services are required.
+The frontend proxies `/api` requests to the backend. Data persists at `backend/data/asterisk.db`, using an absolute path derived from the application location rather than the terminal's working directory. Asterisk creates the data directory automatically, and `*.db` files are excluded from git. The library works without a cloud service; AI features require an OpenAI API key.
 
 If an earlier installation has `backend/curiosity.db`, Asterisk copies it to the new location on first startup when `backend/data/asterisk.db` does not yet exist. The original file is left untouched.
 
@@ -51,8 +51,32 @@ If an earlier installation has `backend/curiosity.db`, Asterisk copies it to the
 - `POST /api/items` — add
 - `PATCH /api/items/{id}` — edit
 - `DELETE /api/items/{id}` — delete
+- `GET /api/items/{id}/concepts` — list concepts
+- `POST /api/items/{id}/concepts` — add a user-authored concept
+- `POST /api/items/{id}/concepts/extract` — explicitly request AI extraction
+- `DELETE /api/concepts/{id}` — remove a concept
+- `GET /api/sidequests` — revisit saved Sidequests
+- `POST /api/sidequests/surprise` — generate and save one Sidequest
 
 Item kinds: `book`, `movie`, `podcast`, `article`, `concept`, `question`, and `thought` (shown as “Random thought” in the interface). Each item has a title, optional personal note and source URL, and an automatic creation timestamp.
+
+## Configure AI features
+
+Asterisk uses the OpenAI Responses API with Structured Outputs. Copy the example configuration, edit in your API key, and export it in the shell that starts Asterisk:
+
+```bash
+cp .env.example .env
+set -a
+source .env
+set +a
+./scripts/dev.sh
+```
+
+`OPENAI_API_KEY` is required. `OPENAI_MODEL` defaults to `gpt-6-astra`, and `OPENAI_TIMEOUT_SECONDS` defaults to `30`.
+
+Concept extraction is always user-triggered. Re-extraction replaces earlier AI suggestions but preserves manually added concepts. Asterisk sends the selected item's type, title, note, and URL string to the configured provider; it does not retrieve the URL or claim to have read its content.
+
+Sidequests require concepts on at least two items of different types. The experimental pipeline selects candidate pairs, generates possible connections, critiques them, rejects weak results, and persists the strongest accepted result. Every saved Sidequest is labeled exploratory and externally unverified.
 
 ## Tests
 
@@ -64,10 +88,9 @@ npm run build
 ```
 
 ## Roadmap
-1. **v0.1 (this version)**: capture, list, search, filter, edit, delete
-2. AI enrichment: extract mechanisms and concepts while preserving user notes separately
-3. Sidequests: generate and critique evidence-backed discovery bridges
-4. Autonomous exploration and feedback-driven ranking
+1. **Milestone 1**: capture, list, search, filter, edit, and delete
+2. **Milestone 2 (current)**: user-triggered concept extraction and experimental Sidequests
+3. Later: evidence gathering, feedback-driven ranking, and deeper discovery strategies
 
 ## Privacy
-This version runs locally. Adding AI services later will require deciding which library content may be sent to external providers.
+Library data and SQLite remain local. When you explicitly use Explore Concepts or Surprise Me, relevant titles, notes, URL strings, and concepts are sent to the configured AI provider. API keys remain in backend environment variables and are never sent to the browser or stored in Git.

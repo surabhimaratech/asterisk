@@ -5,6 +5,8 @@ import './style.css'
 type Kind = 'book' | 'movie' | 'podcast' | 'article' | 'concept' | 'question' | 'thought'
 type ViewMode = 'library' | 'index'
 type Item = { id: number; kind: Kind; title: string; note: string | null; url: string | null; created_at: string }
+type ItemConcept = { id: number; item_id: number; name: string; category: 'personal' | 'general' | 'mechanism'; origin: 'ai' | 'user'; explanation: string | null; created_at: string }
+type Sidequest = { id: number; item_a_id: number; item_b_id: number; item_a_title: string; item_b_title: string; title: string; connection: string; bridge: string; why_interesting: string; where_it_breaks: string; new_question: string; evidence_status: string; created_at: string }
 
 const kinds: Kind[] = ['book', 'movie', 'podcast', 'article', 'concept', 'question', 'thought']
 const icons: Record<Kind, string> = { book: '📚', movie: '🎬', podcast: '🎧', article: '📰', concept: '💡', question: '❓', thought: '✨' }
@@ -40,6 +42,9 @@ function App() {
   const [selectedConcept, setSelectedConcept] = useState<number | null>(null)
   const [selectedQuestion, setSelectedQuestion] = useState<number | null>(null)
   const [selectedThought, setSelectedThought] = useState<number | null>(null)
+  const [conceptItem, setConceptItem] = useState<Item | null>(null)
+  const [sidequests, setSidequests] = useState<Sidequest[]>([])
+  const [sidequestBusy, setSidequestBusy] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
@@ -61,6 +66,15 @@ function App() {
   }
 
   useEffect(() => { void refresh() }, [])
+
+  async function refreshSidequests() {
+    try {
+      const response = await fetch('/api/sidequests')
+      if (response.ok) setSidequests(await response.json())
+    } catch { /* The main library remains usable if Sidequests cannot load. */ }
+  }
+
+  useEffect(() => { void refreshSidequests() }, [])
 
   async function save(event: React.FormEvent) {
     event.preventDefault()
@@ -132,6 +146,28 @@ function App() {
     window.setTimeout(() => document.getElementById('curiosity-room')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50)
   }
 
+  function exploreConcepts(item: Item) {
+    setConceptItem(item)
+    window.setTimeout(() => document.getElementById('concept-workbench')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
+
+  async function surpriseMe() {
+    setSidequestBusy(true)
+    setError('')
+    try {
+      const response = await fetch('/api/sidequests/surprise', { method: 'POST' })
+      if (!response.ok) throw new Error(await responseError(response, 'Could not create a Sidequest'))
+      const created = await response.json()
+      setSidequests(current => [created, ...current])
+      setSuccess('A new Sidequest sparked.')
+      window.setTimeout(() => setSuccess(''), 2500)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Sidequest failed')
+    } finally {
+      setSidequestBusy(false)
+    }
+  }
+
   const normalizedQuery = query.trim().toLowerCase()
   const visible = items.filter(item =>
     (filter === 'all' || item.kind === filter) &&
@@ -151,6 +187,7 @@ function App() {
   const selectedConceptItem = concepts.find(concept => concept.id === selectedConcept) || null
   const selectedQuestionItem = questions.find(question => question.id === selectedQuestion) || null
   const selectedThoughtItem = thoughts.find(thought => thought.id === selectedThought) || null
+  const selectedItem = selectedBookItem || selectedMovieItem || selectedPodcastItem || selectedArticleItem || selectedConceptItem || selectedQuestionItem || selectedThoughtItem
   const deferredCount = visible.length - books.length - movies.length - podcasts.length - articles.length - concepts.length - questions.length - thoughts.length
 
   return <main>
@@ -199,7 +236,7 @@ function App() {
 
       {loading ? <div className="empty">Loading your library…</div> : view === 'index' ? (visible.length === 0 ?
         <div className="empty">{items.length === 0 ? 'Your library is waiting for its first curiosity. Save a book, question, or passing thought above.' : 'No curiosities match your search and filter.'}</div> :
-        <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} onEdit={edit} onRemove={remove} />)}</div>) : <>
+        <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} onEdit={edit} onRemove={remove} onExplore={exploreConcepts} />)}</div>) : <>
         <RoomShell items={items} query={query} focusedZone={focusedZone} onFocus={focusZone} />
         {focusedZone && <div className="room-focus-nav"><button type="button" onClick={returnToRoom}>← Back to room</button><span>{labels[focusedZone]} collection</span></div>}
         {!focusedZone && <div className="room-invitation"><span>✦</span><p>Wander in. Choose a corner of the room to look closer.</p></div>}
@@ -264,20 +301,23 @@ function App() {
         </div>}</>}
     </section>
 
-    <section className="future"><div>✧ &nbsp;COMING NEXT</div><h2>Sidequests</h2><p>Follow unexpected connections and discover where your curiosity leads.</p><button disabled>✦ Sidequests — coming soon</button></section>
+    {selectedItem && <div className="concept-callout"><span>✦ Look beneath the surface</span><button type="button" onClick={() => exploreConcepts(selectedItem)}>Explore Concepts</button></div>}
+    {conceptItem && <ConceptExplorer item={conceptItem} onClose={() => setConceptItem(null)} onError={setError} />}
+
+    <SidequestsView sidequests={sidequests} busy={sidequestBusy} onSurprise={() => void surpriseMe()} />
     {error && <div className="error" role="alert">{error}</div>}
     {success && <div className="success" role="status">{success}</div>}
-    <footer>Asterisk · v0.1 · Your curiosity belongs to you.</footer>
+    <footer>Asterisk · v0.2 · Your curiosity belongs to you.</footer>
   </main>
 }
 
-function ItemCard({ item, onEdit, onRemove }: { item: Item; onEdit: (item: Item) => void; onRemove: (item: Item) => void }) {
+function ItemCard({ item, onEdit, onRemove, onExplore }: { item: Item; onEdit: (item: Item) => void; onRemove: (item: Item) => void; onExplore: (item: Item) => void }) {
   return <article className="item">
     <div className="item-top"><span className="pill">{icons[item.kind]} {labels[item.kind]}</span><span className="date">{new Date(item.created_at).toLocaleDateString()}</span></div>
     <h3>{item.title}</h3>
     {item.note && <p>{item.note}</p>}
     {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}
-    <div className="item-actions"><button onClick={() => onEdit(item)}>Edit</button><button onClick={() => void onRemove(item)}>Delete</button></div>
+    <div className="item-actions"><button onClick={() => onExplore(item)}>Explore Concepts</button><button onClick={() => onEdit(item)}>Edit</button><button onClick={() => void onRemove(item)}>Delete</button></div>
   </article>
 }
 
@@ -437,6 +477,75 @@ function ThoughtDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClos
     <div className="thought-mark"><span>✦</span><strong>NOTE<br />TO SELF</strong><small>{new Date(item.created_at).toLocaleDateString()}</small></div>
     <div className="thought-detail-copy"><span>RANDOM THOUGHT · TUCKED AWAY</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">The thought speaks for itself.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Follow this thread ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Edit this thought</button><button onClick={() => void onRemove(item)}>Discard scrap</button></div></div>
   </article>
+}
+
+function ConceptExplorer({ item, onClose, onError }: { item: Item; onClose: () => void; onError: (message: string) => void }) {
+  const [concepts, setConcepts] = useState<ItemConcept[]>([])
+  const [loading, setLoading] = useState(true)
+  const [extracting, setExtracting] = useState(false)
+  const [name, setName] = useState('')
+  const [category, setCategory] = useState<ItemConcept['category']>('personal')
+
+  async function load() {
+    setLoading(true)
+    try {
+      const response = await fetch(`/api/items/${item.id}/concepts`)
+      if (!response.ok) throw new Error(await responseError(response, 'Could not load concepts'))
+      setConcepts(await response.json())
+    } catch (caught) { onError(caught instanceof Error ? caught.message : 'Could not load concepts') }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { void load() }, [item.id])
+
+  async function extract() {
+    setExtracting(true)
+    onError('')
+    try {
+      const response = await fetch(`/api/items/${item.id}/concepts/extract`, { method: 'POST' })
+      if (!response.ok) throw new Error(await responseError(response, 'Concept extraction failed'))
+      setConcepts(await response.json())
+    } catch (caught) { onError(caught instanceof Error ? caught.message : 'Concept extraction failed') }
+    finally { setExtracting(false) }
+  }
+
+  async function add(event: React.FormEvent) {
+    event.preventDefault()
+    if (!name.trim()) return
+    const response = await fetch(`/api/items/${item.id}/concepts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), category }) })
+    if (!response.ok) { onError(await responseError(response, 'Could not add concept')); return }
+    const created = await response.json()
+    setConcepts(current => [...current, created])
+    setName('')
+  }
+
+  async function remove(concept: ItemConcept) {
+    const response = await fetch(`/api/concepts/${concept.id}`, { method: 'DELETE' })
+    if (!response.ok) { onError(await responseError(response, 'Could not remove concept')); return }
+    setConcepts(current => current.filter(entry => entry.id !== concept.id))
+  }
+
+  return <section className="concept-workbench" id="concept-workbench">
+    <button className="detail-close" type="button" aria-label="Close concept explorer" onClick={onClose}>×</button>
+    <div className="concept-intro"><span>✦ CONCEPT EXPLORER</span><h2>{item.title}</h2><p>AI suggestions are inferences, kept separate from your original note. Asterisk does not retrieve or read the linked source.</p></div>
+    <div className="concept-actions"><button className="primary" type="button" disabled={extracting} onClick={() => void extract()}>{extracting ? 'Looking beneath the surface…' : concepts.some(concept => concept.origin === 'ai') ? '↻ Re-extract concepts' : '✦ Explore Concepts'}</button></div>
+    {loading ? <p className="muted">Opening the concept drawer…</p> : concepts.length === 0 ? <div className="concept-empty">No concepts yet. Ask Asterisk to explore, or add one in your own words.</div> : <div className="concept-list">{concepts.map(concept => <article className={`concept-chip ${concept.origin}`} key={concept.id}>
+      <div><span>{concept.origin === 'ai' ? 'AI-INFERRED' : 'YOUR CONCEPT'} · {concept.category}</span><strong>{concept.name}</strong>{concept.explanation && <p>{concept.explanation}</p>}</div>
+      <button type="button" aria-label={`Remove ${concept.name}`} onClick={() => void remove(concept)}>×</button>
+    </article>)}</div>}
+    <form className="manual-concept" onSubmit={add}><label htmlFor="manual-concept-name">Add your own concept</label><div><input id="manual-concept-name" maxLength={120} placeholder="A principle, theme, or personal idea" value={name} onChange={event => setName(event.target.value)} /><select aria-label="Concept category" value={category} onChange={event => setCategory(event.target.value as ItemConcept['category'])}><option value="personal">Personal</option><option value="general">General theme</option><option value="mechanism">Mechanism</option></select><button disabled={!name.trim()}>Add</button></div></form>
+  </section>
+}
+
+function SidequestsView({ sidequests, busy, onSurprise }: { sidequests: Sidequest[]; busy: boolean; onSurprise: () => void }) {
+  return <section className="sidequests"><div className="sidequest-head"><div><span>03 / DISCOVER</span><h2>Sidequests</h2><p>Unexpected bridges between things that made you curious.</p></div><button className="surprise-button" type="button" disabled={busy} onClick={onSurprise}>{busy ? '✦ Following a thread…' : '✦ Surprise Me'}</button></div>
+    {sidequests.length === 0 ? <div className="sidequest-empty"><strong>No Sidequests yet.</strong><p>Explore concepts on at least two different kinds of curiosities, then ask Asterisk to surprise you.</p></div> : <div className="sidequest-stack">{sidequests.map(sidequest => <article className="sidequest-card" key={sidequest.id}>
+      <div className="evidence-label">✧ {sidequest.evidence_status}</div><h3>{sidequest.title}</h3><div className="connected-items"><span>{sidequest.item_a_title}</span><b>✦</b><span>{sidequest.item_b_title}</span></div>
+      <div className="sidequest-section"><h4>The unexpected connection</h4><p>{sidequest.connection}</p></div>
+      <div className="sidequest-grid"><div><h4>The bridge</h4><p>{sidequest.bridge}</p></div><div><h4>Why it’s interesting</h4><p>{sidequest.why_interesting}</p></div><div><h4>Where it breaks</h4><p>{sidequest.where_it_breaks}</p></div><div className="new-question"><h4>A new question</h4><p>{sidequest.new_question}</p></div></div>
+      <time>{new Date(sidequest.created_at).toLocaleDateString()}</time>
+    </article>)}</div>}
+  </section>
 }
 
 function CollectionEmpty({ icon, message, action, onAction }: { icon: string; message: string; action: string; onAction: () => void }) {
