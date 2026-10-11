@@ -55,7 +55,7 @@ textarea { resize: vertical; }
 .date { font-size: 11px; color: #9a9287; }
 .item h3 { font: normal 23px Georgia, serif; margin: 17px 0 6px; overflow-wrap: anywhere; }
 .item p { color: #716b64; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.item a, .book-detail a, .movie-detail a, .podcast-detail a, .article-detail a { color: #586f5d; font-size: 13px; }
+.item a, .book-detail a, .movie-detail a, .podcast-detail a, .article-detail a, .concept-detail a { color: #586f5d; font-size: 13px; }
 .item-actions { display: flex; gap: 16px; margin-top: auto; padding-top: 24px; }
 .item-actions button { border: 0; background: transparent; color: #777067; font-size: 12px; padding: 0; }
 .item-actions button:hover { text-decoration: underline; }
@@ -121,14 +121,30 @@ textarea { resize: vertical; }
 .article-clipping > small { display: -webkit-box; color: #6e685f; font: 12px/1.5 Georgia, serif; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: pre-wrap; }
 .folded-corner { position: absolute; right: 0; top: 0; border-style: solid; border-width: 0 24px 24px 0; border-color: transparent #d6cebe #bdb4a4 transparent; }
 
-.book-detail, .movie-detail, .podcast-detail, .article-detail { position: relative; margin-top: 25px; display: grid; grid-template-columns: 170px 1fr; gap: 28px; background: #fffdf7; border: 1px solid #d9cebc; border-radius: 5px 13px 13px 5px; padding: 28px; box-shadow: inset 13px 0 18px #8a68431a, 0 8px 22px #5b463322; animation: reveal-book .2s ease-out; }
+.concept-collection { background: #eee8df; border-color: #d8cabb; }
+.catalog-heading span { color: #815d36; }
+.catalog-cabinet { padding: 25px 25px 0; border: 1px solid #6d4829; border-radius: 7px; background: repeating-linear-gradient(90deg, #7e522e 0 7px, #865b35 7px 14px, #764927 14px 20px); box-shadow: inset 0 7px 13px #321d0c66, 0 6px 12px #4c2d1945; }
+.catalog-drawer { padding: 20px 20px 0; border: 2px solid #57361e; background: #9a6a3c; box-shadow: inset 0 7px 12px #40240f66; }
+.concept-cards { min-height: 205px; display: flex; align-items: end; gap: 7px; overflow-x: auto; padding: 15px 7px 0; scrollbar-width: thin; }
+.concept-card { position: relative; flex: 0 0 225px; height: 164px; display: flex; flex-direction: column; padding: 17px 18px 12px; border: 1px solid #c9bfae; border-radius: 3px 3px 0 0; color: #3e3a34; background: repeating-linear-gradient(0deg, #faf7ec 0 25px, #a4b3b82d 26px, #faf7ec 27px); text-align: left; box-shadow: 2px 0 5px #3c251544; transition: transform .18s ease, height .18s ease; }
+.concept-card:nth-child(2n) { background-color: #f2eddd; }
+.concept-card:hover, .concept-card:focus-visible, .concept-card.selected { height: 187px; transform: translateY(-5px); outline: 3px solid #fff; outline-offset: 2px; }
+.card-index { color: #9b5844; font: 800 8px ui-monospace, monospace; letter-spacing: .12em; }
+.concept-card > strong { margin-top: 12px; font: 20px/1.05 Georgia, serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ruled-lines { display: -webkit-box; margin-top: 12px; color: #6d675d; font: 11px/1.55 Georgia, serif; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-wrap; }
+.concept-card > small { margin-top: auto; font-size: 7px; letter-spacing: .12em; color: #8c8276; }
+.drawer-front { height: 61px; display: flex; align-items: center; justify-content: center; position: relative; margin: 0 -22px; border: 2px solid #57361e; background: linear-gradient(#a87847, #85562f); box-shadow: inset 0 2px #c99a68, 0 -4px 8px #43271044; }
+.drawer-front span { border: 1px solid #b28a5d; padding: 4px 20px; color: #e7d4b8; background: #725030; font-size: 9px; letter-spacing: .18em; }
+.drawer-front i { position: absolute; bottom: 7px; width: 45px; height: 7px; border: 2px solid #4d321e; border-radius: 0 0 10px 10px; background: #b48a5c; }
+
+.book-detail, .movie-detail, .podcast-detail, .article-detail, .concept-detail { position: relative; margin-top: 25px; display: grid; grid-template-columns: 170px 1fr; gap: 28px; background: #fffdf7; border: 1px solid #d9cebc; border-radius: 5px 13px 13px 5px; padding: 28px; box-shadow: inset 13px 0 18px #8a68431a, 0 8px 22px #5b463322; animation: reveal-book .2s ease-out; }
 @keyframes reveal-book { from { opacity: 0; transform: translateY(-8px); } }
 .bookplate { align-self: start; border: 1px solid #b9a991; outline: 3px double #cbbca6; outline-offset: -7px; padding: 25px 12px; text-align: center; color: #81715e; font: 9px/1.8 Georgia, serif; letter-spacing: .14em; }
 .bookplate strong { font-size: 14px; color: #5c4c3b; }
-.book-detail-copy > span, .movie-detail-copy > span, .podcast-detail-copy > span, .article-detail-copy > span { color: #9a8068; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
-.book-detail h3, .movie-detail h3, .podcast-detail h3, .article-detail h3 { font: normal 30px/1.15 Georgia, serif; margin: 8px 35px 12px 0; }
-.book-detail p, .movie-detail p, .podcast-detail p, .article-detail p { white-space: pre-wrap; color: #655f57; line-height: 1.65; margin: 0 0 12px; }
-.book-detail p.muted, .movie-detail p.muted, .podcast-detail p.muted, .article-detail p.muted { color: #a0988e; font-style: italic; }
+.book-detail-copy > span, .movie-detail-copy > span, .podcast-detail-copy > span, .article-detail-copy > span, .concept-detail-copy > span { color: #9a8068; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.book-detail h3, .movie-detail h3, .podcast-detail h3, .article-detail h3, .concept-detail h3 { font: normal 30px/1.15 Georgia, serif; margin: 8px 35px 12px 0; }
+.book-detail p, .movie-detail p, .podcast-detail p, .article-detail p, .concept-detail p { white-space: pre-wrap; color: #655f57; line-height: 1.65; margin: 0 0 12px; }
+.book-detail p.muted, .movie-detail p.muted, .podcast-detail p.muted, .article-detail p.muted, .concept-detail p.muted { color: #a0988e; font-style: italic; }
 .movie-detail { background: #f4f2ed; border-color: #c9c5bc; border-radius: 10px; box-shadow: inset 10px 0 16px #0000000f, 0 8px 22px #25252229; }
 .ticket-stub { align-self: start; min-height: 135px; display: flex; flex-direction: column; justify-content: center; gap: 8px; border: 1px solid #b9a895; border-left: 6px dotted #c7b7a5; padding: 19px; color: #6d554d; background: #ead9b7; text-align: center; transform: rotate(-1deg); }
 .ticket-stub span { font-size: 8px; font-weight: 800; letter-spacing: .13em; }
@@ -143,6 +159,10 @@ textarea { resize: vertical; }
 .press-mark { align-self: start; min-height: 135px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border-block: 3px double #3e3a35; color: #3e3a35; background: #f5f0e4; }
 .press-mark span { font: 10px Georgia, serif; letter-spacing: .2em; }
 .press-mark strong { color: #a64e44; font-size: 30px; }
+.concept-detail { background: #f7f1e7; border-color: #cdbda8; }
+.catalog-label { align-self: start; min-height: 135px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 8px solid #875a34; outline: 1px solid #59391f; color: #503b2b; background: #e8d3ad; }
+.catalog-label small, .catalog-label span { font-size: 8px; font-weight: 800; letter-spacing: .15em; }
+.catalog-label strong { font: 40px Georgia, serif; }
 .detail-close { position: absolute; right: 16px; top: 13px; border: 0; background: transparent; color: #897d6e; font-size: 22px; }
 .index-nudge { display: flex; align-items: center; gap: 14px; margin-top: 25px; border-top: 1px solid #ddd5c9; padding-top: 20px; color: #766f66; }
 .index-nudge > span { color: #bd8053; }
@@ -171,13 +191,15 @@ footer { text-align: center; color: #aaa296; font-size: 12px; margin: 45px 0 0; 
   .visual-collection { padding: 20px 14px; }
   .shelf-heading { align-items: start; flex-direction: column; gap: 5px; }
   .shelf { margin: 0 -5px; padding-left: 13px; padding-right: 13px; }
-  .book-detail, .movie-detail, .podcast-detail, .article-detail { grid-template-columns: 1fr; gap: 20px; }
+  .book-detail, .movie-detail, .podcast-detail, .article-detail, .concept-detail { grid-template-columns: 1fr; gap: 20px; }
   .bookplate { max-width: 190px; }
   .ticket-stub { max-width: 200px; }
   .radio-card { max-width: 200px; }
   .cassette-tray { padding: 18px 12px; }
   .article-pile { padding: 18px 12px; }
   .press-mark { max-width: 200px; }
+  .catalog-cabinet { padding-inline: 12px; }
+  .catalog-label { max-width: 200px; }
   .index-nudge { align-items: flex-start; flex-wrap: wrap; }
   .index-nudge p { min-width: calc(100% - 40px); }
   .index-nudge button { margin-left: 31px; }

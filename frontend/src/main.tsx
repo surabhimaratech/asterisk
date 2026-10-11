@@ -36,6 +36,7 @@ function App() {
   const [selectedMovie, setSelectedMovie] = useState<number | null>(null)
   const [selectedPodcast, setSelectedPodcast] = useState<number | null>(null)
   const [selectedArticle, setSelectedArticle] = useState<number | null>(null)
+  const [selectedConcept, setSelectedConcept] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
@@ -99,6 +100,7 @@ function App() {
       if (selectedMovie === item.id) setSelectedMovie(null)
       if (selectedPodcast === item.id) setSelectedPodcast(null)
       if (selectedArticle === item.id) setSelectedArticle(null)
+      if (selectedConcept === item.id) setSelectedConcept(null)
       await refresh()
       setSuccess('Curiosity deleted.')
       window.setTimeout(() => setSuccess(''), 2500)
@@ -122,11 +124,13 @@ function App() {
   const movies = visible.filter(item => item.kind === 'movie')
   const podcasts = visible.filter(item => item.kind === 'podcast')
   const articles = visible.filter(item => item.kind === 'article')
+  const concepts = visible.filter(item => item.kind === 'concept')
   const selectedBookItem = books.find(book => book.id === selectedBook) || null
   const selectedMovieItem = movies.find(movie => movie.id === selectedMovie) || null
   const selectedPodcastItem = podcasts.find(podcast => podcast.id === selectedPodcast) || null
   const selectedArticleItem = articles.find(article => article.id === selectedArticle) || null
-  const deferredCount = visible.length - books.length - movies.length - podcasts.length - articles.length
+  const selectedConceptItem = concepts.find(concept => concept.id === selectedConcept) || null
+  const deferredCount = visible.length - books.length - movies.length - podcasts.length - articles.length - concepts.length
 
   return <main>
     <header>
@@ -207,6 +211,14 @@ function App() {
             </div>
             {selectedArticleItem && <ArticleDetail item={selectedArticleItem} onClose={() => setSelectedArticle(null)} onEdit={edit} onRemove={remove} />}
           </section> : filter === 'article' && <CollectionEmpty icon="🗞️" message="The reading pile is empty." action="Save your first article" onAction={() => startCapture('article')} />)}
+
+          {(filter === 'all' || filter === 'concept') && (concepts.length > 0 ? <section className="visual-collection concept-collection">
+            <div className="shelf-heading catalog-heading"><div><span>THE CARD CATALOG</span><h3>{normalizedQuery ? `${concepts.length} matching ${concepts.length === 1 ? 'concept' : 'concepts'}` : `${concepts.length} ${concepts.length === 1 ? 'entry' : 'entries'}`}</h3></div><p>Ideas filed for future reference.</p></div>
+            <div className="catalog-cabinet" aria-label="Concept card catalog"><div className="catalog-drawer"><div className="concept-cards">
+              {concepts.map(concept => <ConceptCard key={concept.id} item={concept} selected={selectedConcept === concept.id} onSelect={() => setSelectedConcept(selectedConcept === concept.id ? null : concept.id)} />)}
+            </div><div className="drawer-front"><span>CONCEPTS</span><i /></div></div></div>
+            {selectedConceptItem && <ConceptDetail item={selectedConceptItem} onClose={() => setSelectedConcept(null)} onEdit={edit} onRemove={remove} />}
+          </section> : filter === 'concept' && <CollectionEmpty icon="🗂️" message="No concepts have been filed yet." action="File your first concept" onAction={() => startCapture('concept')} />)}
 
           {deferredCount > 0 && <div className="index-nudge"><span>✦</span><p><strong>{deferredCount} other {deferredCount === 1 ? 'curiosity is' : 'curiosities are'} nearby.</strong> Their visual collections are still taking shape.</p><button type="button" onClick={() => setView('index')}>View in Index</button></div>}
         </div>}
@@ -308,6 +320,23 @@ function ArticleDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClos
     <button type="button" className="detail-close" aria-label="Close article details" onClick={onClose}>×</button>
     <div className="press-mark"><span>THE</span><strong>✦</strong><span>READER</span></div>
     <div className="article-detail-copy"><span>ARTICLE · CLIPPED {new Date(item.created_at).toLocaleDateString()}</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">No margin note yet.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Read original ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Edit this clipping</button><button onClick={() => void onRemove(item)}>Discard clipping</button></div></div>
+  </article>
+}
+
+function ConceptCard({ item, selected, onSelect }: { item: Item; selected: boolean; onSelect: () => void }) {
+  return <button type="button" className={`concept-card ${selected ? 'selected' : ''}`} aria-label={`${item.title}, concept card, filed ${new Date(item.created_at).toLocaleDateString()}`} aria-pressed={selected} onClick={onSelect}>
+    <span className="card-index">{String.fromCharCode(65 + (item.id % 26))}—{String(item.id).padStart(3, '0')}</span>
+    <strong>{item.title}</strong>
+    <span className="ruled-lines">{item.note || 'Filed without a note.'}</span>
+    <small>✦ ASTERISK CATALOG</small>
+  </button>
+}
+
+function ConceptDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose: () => void; onEdit: (item: Item) => void; onRemove: (item: Item) => void }) {
+  return <article className="concept-detail">
+    <button type="button" className="detail-close" aria-label="Close concept details" onClick={onClose}>×</button>
+    <div className="catalog-label"><small>SUBJECT</small><strong>{String.fromCharCode(65 + (item.id % 26))}</strong><span>DRAWER {String(item.id).padStart(2, '0')}</span></div>
+    <div className="concept-detail-copy"><span>CONCEPT · FILED {new Date(item.created_at).toLocaleDateString()}</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">No field note yet.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Edit this card</button><button onClick={() => void onRemove(item)}>Remove from catalog</button></div></div>
   </article>
 }
 
