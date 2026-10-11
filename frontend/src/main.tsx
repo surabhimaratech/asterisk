@@ -303,6 +303,7 @@ function RoomShell({ items, query, focusedZone, onFocus }: { items: Item[]; quer
     <div className="right-wall"><div className="room-desk"><div className="mini-papers">{roomArticles.map(article => <i className={miniClass(article)} key={article.id} title={article.title} />)}</div><div className="mini-thoughts">{roomThoughts.map(thought => <i className={miniClass(thought)} key={thought.id} title={thought.title}>✦</i>)}</div><div className="desk-top" /><div className="desk-drawers"><i /><i /></div><div className="desk-legs"><i /><i /></div></div><div className="question-crate"><div className="mini-bulbs">{roomQuestions.map(question => <i className={miniClass(question)} key={question.id} title={question.title}>?</i>)}</div></div></div>
     <div className="room-plant plant-left" aria-hidden="true"><i /><i /><i /><i /><b /></div>
     <div className="room-plant plant-right" aria-hidden="true"><i /><i /><i /><i /><b /></div>
+    <div className="floor-lamp" aria-hidden="true"><i /><b /></div>
     <div className="reading-chair" aria-hidden="true"><div className="chair-back" /><div className="chair-seat" /><i /><i /></div>
     <div className="room-floor"><div className="room-rug"><span>THERE'S MORE<br />TO THE STORY</span></div></div>
     <div className="door-threshold"><span>THE CURIOSITY ROOM</span></div>
