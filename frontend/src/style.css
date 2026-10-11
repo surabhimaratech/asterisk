@@ -60,12 +60,12 @@ textarea { resize: vertical; }
 .item-actions button { border: 0; background: transparent; color: #777067; font-size: 12px; padding: 0; }
 .item-actions button:hover { text-decoration: underline; }
 
-.room-shell { --floor-line: 31%; position: relative; height: clamp(460px, 62vw, 650px); margin-bottom: 28px; overflow: hidden; border: 1px solid #cfc5b8; border-radius: 18px 18px 7px 7px; background: #ded2c1; box-shadow: 0 18px 35px #49362526; isolation: isolate; }
-.room-glow { position: absolute; z-index: 6; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 18%, #fff8df42 0 20%, transparent 62%), linear-gradient(90deg, #34291f20, transparent 21% 79%, #34291f20), linear-gradient(0deg, #2f21131a, transparent 30%); }
+.room-shell { --floor-line: 31%; position: relative; height: clamp(460px, 62vw, 650px); margin-bottom: 28px; overflow: hidden; border: 7px solid #4a2e20; border-radius: 18px 18px 7px 7px; background: #c8b49a; box-shadow: 0 18px 35px #49362538, inset 0 0 0 2px #9e7655; isolation: isolate; }
+.room-glow { position: absolute; z-index: 6; inset: 0; pointer-events: none; background: radial-gradient(circle at 72% 36%, #ffe5a442 0 8%, transparent 27%), radial-gradient(ellipse at 50% 18%, #fff0c33d 0 18%, transparent 58%), linear-gradient(90deg, #21150d38, transparent 20% 80%, #21150d38), linear-gradient(0deg, #2f211326, transparent 32%); }
 .back-wall { position: absolute; z-index: 1; left: 18%; right: 18%; top: 0; bottom: var(--floor-line); background: radial-gradient(ellipse at 50% 12%, #eee4d526 0, transparent 58%), repeating-linear-gradient(90deg, #0000 0 86px, #8b725407 87px, #0000 88px 174px), linear-gradient(#d8cbb8, #d1c1ac); box-shadow: inset 0 -18px 28px #705a4026; }
 .left-wall, .right-wall { position: absolute; z-index: 2; top: 0; bottom: var(--floor-line); width: 25%; overflow: hidden; }
-.left-wall { left: 0; background: repeating-linear-gradient(100deg, #0000 0 82px, #725b4008 83px, #0000 84px 166px), linear-gradient(100deg, #b9ab97, #d0c2af); clip-path: polygon(0 0, 100% 0, 72% 100%, 0 100%); box-shadow: inset -16px 0 24px #59463116; }
-.right-wall { right: 0; background: repeating-linear-gradient(260deg, #0000 0 82px, #725b4008 83px, #0000 84px 166px), linear-gradient(260deg, #b9ab97, #d0c2af); clip-path: polygon(0 0, 100% 0, 100% 100%, 28% 100%); box-shadow: inset 16px 0 24px #59463116; }
+.left-wall { left: 0; background: repeating-linear-gradient(0deg, #4a2d20 0 7px, transparent 7px 64px), repeating-linear-gradient(90deg, #506a54 0 8px, #c88951 8px 15px, #a94f43 15px 24px, #d0ad61 24px 34px, #6f7770 34px 43px, #0000 43px 58px), linear-gradient(100deg, #70472f, #936849); clip-path: polygon(0 0, 100% 0, 72% 100%, 0 100%); box-shadow: inset -20px 0 24px #29170e55; }
+.right-wall { right: 0; background: repeating-linear-gradient(0deg, #4a2d20 0 7px, transparent 7px 64px), repeating-linear-gradient(90deg, #82614a 0 9px, #596d5a 9px 17px, #bd704c 17px 26px, #d0b466 26px 34px, #85545a 34px 44px, #0000 44px 59px), linear-gradient(260deg, #70472f, #936849); clip-path: polygon(0 0, 100% 0, 100% 100%, 28% 100%); box-shadow: inset 20px 0 24px #29170e55; }
 .back-wall::before, .left-wall::before, .right-wall::before { content: ""; position: absolute; z-index: 4; left: 0; right: 0; top: 0; height: 9px; border-bottom: 2px solid #aa8c68; background: linear-gradient(#75543a, #9a7653 55%, #66472f); box-shadow: 0 3px 7px #4a352230; }
 .back-wall::after, .left-wall::after, .right-wall::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 10px; border-top: 2px solid #a48768; background: linear-gradient(#8d6c50, #684a35); box-shadow: 0 3px 6px #3e2a1c4d; }
 .room-floor { position: absolute; z-index: 0; left: 0; right: 0; bottom: 0; height: var(--floor-line); background: repeating-linear-gradient(100deg, #76563f 0 3px, #957055 3px 47px, #6e4d37 48px 51px); box-shadow: inset 0 18px 25px #3321154f; }
@@ -73,7 +73,7 @@ textarea { resize: vertical; }
 .room-rug span { margin-top: 8%; font: 9px/1.5 Georgia, serif; letter-spacing: .15em; text-align: center; }
 .room-emblem { position: absolute; left: 50%; top: 5%; transform: translateX(-50%); color: #b27d4e; font-size: 23px; text-align: center; }
 .room-emblem small { display: block; margin-top: 2px; color: #715d49; font: 7px sans-serif; letter-spacing: .24em; }
-.room-bookcase { position: absolute; left: 9%; right: 9%; top: 17%; bottom: 2%; padding: 13px 12px 15px; background: #69452d; box-shadow: inset 0 0 0 5px #835a39, 0 8px 15px #4a301e4f; }
+.room-bookcase { position: absolute; left: 6%; right: 6%; top: 15%; bottom: 2%; padding: 13px 12px 15px; background: #5a3625; box-shadow: inset 0 0 0 5px #7b5134, 0 8px 15px #3d24186b; }
 .case-top { height: 10px; margin: -18px -18px 7px; border-radius: 4px; background: #4e301e; box-shadow: inset 0 2px #9a704c; }
 .case-bays { height: calc(100% - 27px); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 8px; }
 .case-bays i { border: 5px solid #53321f; background: linear-gradient(#39271e, #4a3427); box-shadow: inset 0 -7px #795238; }
@@ -111,6 +111,21 @@ textarea { resize: vertical; }
 .question-crate { position: absolute; left: 7%; bottom: 2%; width: 29%; height: 21%; border: 5px solid #806442; background: #b08d5c; box-shadow: inset 0 8px #765735; transform: perspective(250px) rotateY(-6deg); }
 .mini-bulbs { position: absolute; left: 5%; right: 5%; bottom: 33%; display: flex; justify-content: space-around; }
 .mini-bulbs i { width: 17px; height: 17px; display: grid; place-items: center; border: 1px solid #ad974f; border-radius: 50%; color: #766425; background: radial-gradient(circle at 35% 30%, #fff 0 12%, #e7d66d 15% 70%, #b59e43); font: 10px Georgia, serif; box-shadow: 0 0 6px #ffe875aa; }
+.room-lights { position: absolute; z-index: 7; left: 5%; right: 5%; top: 5%; height: 16%; pointer-events: none; border-top: 2px solid #38231a; border-radius: 50%; transform: rotate(-2deg); }
+.room-lights::after { content: ""; position: absolute; left: 20%; right: 12%; top: 32%; height: 50%; border-top: 2px solid #38231a; border-radius: 50%; transform: rotate(7deg); }
+.room-lights i { position: absolute; width: 13px; height: 17px; border: 2px solid #493022; border-radius: 48% 48% 55% 55%; background: radial-gradient(circle at 45% 35%, #fff8c9 0 12%, #f1bd4f 38%, #c8792f); box-shadow: 0 0 13px #ffc855cc; }
+.room-lights i::before { content: ""; position: absolute; left: 4px; top: -8px; width: 3px; height: 7px; background: #352118; }
+.room-lights i:nth-child(1) { left: 8%; top: -2px; }.room-lights i:nth-child(2) { left: 29%; top: 17px; }.room-lights i:nth-child(3) { left: 49%; top: 29px; }.room-lights i:nth-child(4) { left: 69%; top: 14px; }.room-lights i:nth-child(5) { right: 6%; top: -2px; }
+.room-plant { position: absolute; z-index: 5; width: 55px; height: 75px; pointer-events: none; }
+.room-plant b { position: absolute; left: 16px; bottom: 0; width: 28px; height: 25px; border-radius: 4px 4px 12px 12px; background: linear-gradient(90deg, #684331, #a36d4a, #684331); }
+.room-plant i { position: absolute; left: 25px; bottom: 21px; width: 19px; height: 31px; border-radius: 90% 10% 80% 20%; background: #536d43; transform-origin: bottom; box-shadow: inset 4px 0 #79905b; }
+.room-plant i:nth-child(1) { transform: rotate(-52deg); }.room-plant i:nth-child(2) { transform: rotate(-20deg) translateY(-9px); }.room-plant i:nth-child(3) { transform: rotate(22deg) translateY(-12px); }.room-plant i:nth-child(4) { transform: rotate(54deg); }
+.plant-left { left: 25%; bottom: 27%; transform: scale(.72); }.plant-right { right: 18%; bottom: 27%; transform: scale(.85); }
+.reading-chair { position: absolute; z-index: 5; left: 27%; bottom: 24%; width: 82px; height: 105px; pointer-events: none; filter: drop-shadow(5px 6px 5px #2e1c164a); }
+.chair-back { position: absolute; left: 7px; top: 0; width: 67px; height: 72px; border: 5px solid #5a3026; border-radius: 26px 26px 12px 12px; background: linear-gradient(110deg, #984d3f, #b65d47); }
+.chair-back::after { content: ""; position: absolute; inset: 12px 14px 18px; border-radius: 8px; background: #d6a552; transform: rotate(-5deg); box-shadow: 0 4px #b37b36; }
+.chair-seat { position: absolute; left: 5px; bottom: 17px; width: 72px; height: 30px; border: 5px solid #5a3026; border-radius: 9px; background: #a65040; }
+.reading-chair > i { position: absolute; bottom: 0; width: 6px; height: 22px; background: #4c3024; }.reading-chair > i:nth-of-type(1) { left: 14px; transform: rotate(5deg); }.reading-chair > i:nth-of-type(2) { right: 14px; transform: rotate(-5deg); }
 .door-threshold { position: absolute; z-index: 7; left: 0; right: 0; bottom: 0; height: 26px; display: grid; place-items: center; border-top: 5px solid #4b3022; color: #d9c5a9; background: #38251c; font-size: 7px; letter-spacing: .23em; }
 .room-zone { position: absolute; z-index: 8; border: 1px solid transparent; color: #fff; background: transparent; border-radius: 9px; transition: background .2s ease, box-shadow .2s ease, opacity .2s ease; }
 .room-zone span { position: absolute; left: 50%; bottom: 9px; transform: translateX(-50%) translateY(5px); padding: 5px 8px; border-radius: 10px; color: #f8f1e6; background: #30261dcc; font-size: 8px; letter-spacing: .08em; white-space: nowrap; opacity: 0; transition: opacity .18s ease, transform .18s ease; }
