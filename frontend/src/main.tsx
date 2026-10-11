@@ -37,6 +37,7 @@ function App() {
   const [selectedPodcast, setSelectedPodcast] = useState<number | null>(null)
   const [selectedArticle, setSelectedArticle] = useState<number | null>(null)
   const [selectedConcept, setSelectedConcept] = useState<number | null>(null)
+  const [selectedQuestion, setSelectedQuestion] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
@@ -101,6 +102,7 @@ function App() {
       if (selectedPodcast === item.id) setSelectedPodcast(null)
       if (selectedArticle === item.id) setSelectedArticle(null)
       if (selectedConcept === item.id) setSelectedConcept(null)
+      if (selectedQuestion === item.id) setSelectedQuestion(null)
       await refresh()
       setSuccess('Curiosity deleted.')
       window.setTimeout(() => setSuccess(''), 2500)
@@ -125,12 +127,14 @@ function App() {
   const podcasts = visible.filter(item => item.kind === 'podcast')
   const articles = visible.filter(item => item.kind === 'article')
   const concepts = visible.filter(item => item.kind === 'concept')
+  const questions = visible.filter(item => item.kind === 'question')
   const selectedBookItem = books.find(book => book.id === selectedBook) || null
   const selectedMovieItem = movies.find(movie => movie.id === selectedMovie) || null
   const selectedPodcastItem = podcasts.find(podcast => podcast.id === selectedPodcast) || null
   const selectedArticleItem = articles.find(article => article.id === selectedArticle) || null
   const selectedConceptItem = concepts.find(concept => concept.id === selectedConcept) || null
-  const deferredCount = visible.length - books.length - movies.length - podcasts.length - articles.length - concepts.length
+  const selectedQuestionItem = questions.find(question => question.id === selectedQuestion) || null
+  const deferredCount = visible.length - books.length - movies.length - podcasts.length - articles.length - concepts.length - questions.length
 
   return <main>
     <header>
@@ -219,6 +223,14 @@ function App() {
             </div><div className="drawer-front"><span>CONCEPTS</span><i /></div></div></div>
             {selectedConceptItem && <ConceptDetail item={selectedConceptItem} onClose={() => setSelectedConcept(null)} onEdit={edit} onRemove={remove} />}
           </section> : filter === 'concept' && <CollectionEmpty icon="🗂️" message="No concepts have been filed yet." action="File your first concept" onAction={() => startCapture('concept')} />)}
+
+          {(filter === 'all' || filter === 'question') && (questions.length > 0 ? <section className="visual-collection question-collection">
+            <div className="shelf-heading question-heading"><div><span>THE QUESTION BOX</span><h3>{normalizedQuery ? `${questions.length} matching ${questions.length === 1 ? 'question' : 'questions'}` : `${questions.length} ${questions.length === 1 ? 'bright idea' : 'bright ideas'}`}</h3></div><p>Unanswered is an excellent place to begin.</p></div>
+            <div className="question-box" aria-label="Question lightbulb box"><div className="bulb-compartments">
+              {questions.map(question => <QuestionBulb key={question.id} item={question} selected={selectedQuestion === question.id} onSelect={() => setSelectedQuestion(selectedQuestion === question.id ? null : question.id)} />)}
+            </div><div className="box-label">FRAGILE · IDEAS INSIDE · ✦</div></div>
+            {selectedQuestionItem && <QuestionDetail item={selectedQuestionItem} onClose={() => setSelectedQuestion(null)} onEdit={edit} onRemove={remove} />}
+          </section> : filter === 'question' && <CollectionEmpty icon="💡" message="The question box is waiting." action="Ask your first question" onAction={() => startCapture('question')} />)}
 
           {deferredCount > 0 && <div className="index-nudge"><span>✦</span><p><strong>{deferredCount} other {deferredCount === 1 ? 'curiosity is' : 'curiosities are'} nearby.</strong> Their visual collections are still taking shape.</p><button type="button" onClick={() => setView('index')}>View in Index</button></div>}
         </div>}
@@ -337,6 +349,21 @@ function ConceptDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClos
     <button type="button" className="detail-close" aria-label="Close concept details" onClick={onClose}>×</button>
     <div className="catalog-label"><small>SUBJECT</small><strong>{String.fromCharCode(65 + (item.id % 26))}</strong><span>DRAWER {String(item.id).padStart(2, '0')}</span></div>
     <div className="concept-detail-copy"><span>CONCEPT · FILED {new Date(item.created_at).toLocaleDateString()}</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">No field note yet.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Edit this card</button><button onClick={() => void onRemove(item)}>Remove from catalog</button></div></div>
+  </article>
+}
+
+function QuestionBulb({ item, selected, onSelect }: { item: Item; selected: boolean; onSelect: () => void }) {
+  return <button type="button" className={`question-bulb ${selected ? 'selected' : ''}`} aria-label={`${item.title}, question lightbulb, added ${new Date(item.created_at).toLocaleDateString()}`} aria-pressed={selected} onClick={onSelect}>
+    <span className="bulb-glass" aria-hidden="true"><i>?</i></span><span className="bulb-base" aria-hidden="true" />
+    <strong>{item.title}</strong><small>QUESTION {String(item.id).padStart(2, '0')}</small>
+  </button>
+}
+
+function QuestionDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose: () => void; onEdit: (item: Item) => void; onRemove: (item: Item) => void }) {
+  return <article className="question-detail">
+    <button type="button" className="detail-close" aria-label="Close question details" onClick={onClose}>×</button>
+    <div className="inquiry-mark"><span>?</span><small>STILL<br />WONDERING</small></div>
+    <div className="question-detail-copy"><span>QUESTION · ASKED {new Date(item.created_at).toLocaleDateString()}</span><h3>{item.title}</h3>{item.note ? <p>{item.note}</p> : <p className="muted">No clues gathered yet.</p>}{item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Follow the clue ↗</a>}<div className="item-actions"><button onClick={() => onEdit(item)}>Refine this question</button><button onClick={() => void onRemove(item)}>Remove from box</button></div></div>
   </article>
 }
 
