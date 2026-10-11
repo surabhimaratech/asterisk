@@ -76,7 +76,7 @@ textarea { resize: vertical; }
 .room-bookcase { position: absolute; left: 23%; right: 5%; top: 15%; bottom: 2%; padding: 13px 12px 15px; background: #5a3625; box-shadow: inset 0 0 0 5px #7b5134, 0 8px 15px #3d24186b; }
 .case-top { height: 10px; margin: -18px -18px 7px; border-radius: 4px; background: #4e301e; box-shadow: inset 0 2px #9a704c; }
 .case-bays { height: calc(100% - 27px); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 8px; }
-.case-bays i { border: 5px solid #53321f; background: linear-gradient(0deg, transparent 0 8px, #4f654f 8px 24px, transparent 24px), repeating-linear-gradient(90deg, #8a5542 0 7px, #c09654 7px 13px, #56695d 13px 20px, #7b5558 20px 27px, #b07a4a 27px 34px, #0000 34px 42px), linear-gradient(#39271e, #4a3427); background-size: 100% 37px, 100% 37px, 100% 100%; background-position: left bottom; background-repeat: no-repeat; box-shadow: inset 0 -7px #795238; }
+.case-bays i { border: 5px solid #53321f; background: linear-gradient(#39271e, #4a3427); box-shadow: inset 0 -7px #795238; }
 .miniature-books { position: absolute; left: 7%; right: 7%; top: 24%; bottom: 13%; display: flex; flex-wrap: wrap; align-content: space-between; gap: 2px; padding: 0 3px; pointer-events: none; }
 .miniature-books i { width: clamp(3px, .65vw, 7px); align-self: end; border-radius: 1px 1px 0 0; background: var(--mini-book); box-shadow: inset 1px 0 #fff3; }
 .case-base { height: 13px; margin: 5px -16px -15px; background: #4d2e1c; }
