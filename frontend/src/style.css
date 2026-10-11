@@ -77,7 +77,7 @@ textarea { resize: vertical; }
 .case-top { height: 10px; margin: -18px -18px 7px; border-radius: 4px; background: #4e301e; box-shadow: inset 0 2px #9a704c; }
 .case-bays { height: calc(100% - 27px); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(4, 1fr); gap: 6px 8px; }
 .case-bays i { border: 5px solid #53321f; background: linear-gradient(#39271e, #4a3427); box-shadow: inset 0 -7px #795238; }
-.miniature-books { position: absolute; left: 7%; right: 7%; bottom: 71%; height: 38px; display: flex; align-items: flex-end; gap: 2px; padding: 0 3px; pointer-events: none; }
+.miniature-books { position: absolute; left: 7%; right: 7%; bottom: 77%; height: 38px; display: flex; align-items: flex-end; gap: 2px; padding: 0 3px; pointer-events: none; }
 .miniature-books i { width: clamp(3px, .65vw, 7px); align-self: end; border-radius: 1px 1px 0 0; background: var(--mini-book); box-shadow: inset 1px 0 #fff3; }
 .case-base { height: 13px; margin: 5px -16px -15px; background: #4d2e1c; }
 .room-catalog { position: absolute; left: 48%; right: 22%; bottom: 0; height: 21%; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 5px; background: #7c512f; box-shadow: 0 5px 8px #3d27194a; }
