@@ -80,16 +80,16 @@ textarea { resize: vertical; }
 .miniature-books { position: absolute; left: 7%; right: 7%; bottom: 79%; height: 38px; display: flex; align-items: flex-end; gap: 2px; padding: 0 3px; pointer-events: none; }
 .miniature-books i { width: clamp(3px, .65vw, 7px); align-self: end; border-radius: 1px 1px 0 0; background: var(--mini-book); box-shadow: inset 1px 0 #fff3; }
 .case-base { height: 13px; margin: 5px -16px -15px; background: #4d2e1c; }
-.room-catalog { position: absolute; left: 48%; right: 22%; bottom: 0; height: 21%; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 5px; background: #7c512f; box-shadow: 0 5px 8px #3d27194a; }
-.room-catalog i { border: 1px solid #55351e; background: #986940; box-shadow: inset 0 -5px #6c4529; }
+.room-catalog { position: absolute; left: 48%; right: 22%; bottom: 0; height: 21%; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 5px; background: #765a35; box-shadow: 0 5px 8px #3d27194a; }
+.room-catalog i { border: 1px solid #5d4529; background: #b08750; box-shadow: inset 0 -5px #80603a; }
 .room-catalog b { position: absolute; bottom: 72%; width: 13px; height: 13px; display: grid; place-items: center; border: 1px solid #b6a382; color: #765743; background: #efe4c8; font: 7px Georgia, serif; transform: rotate(-2deg); }
 .room-catalog b:nth-of-type(1) { left: 8%; }.room-catalog b:nth-of-type(2) { left: 26%; }.room-catalog b:nth-of-type(3) { left: 47%; }.room-catalog b:nth-of-type(4) { left: 67%; }.room-catalog b:nth-of-type(5) { left: 82%; }
-.media-console { position: absolute; left: 5%; bottom: 3%; width: 58%; height: 34%; padding: 7px; background: #554233; transform: perspective(300px) rotateY(7deg); transform-origin: left bottom; box-shadow: 4px 7px 10px #25322955; }
+.media-console { position: absolute; left: 5%; bottom: 3%; width: 58%; height: 34%; padding: 7px; background: #3f5156; transform: perspective(300px) rotateY(7deg); transform-origin: left bottom; box-shadow: 4px 7px 10px #1e2c305e; }
 .console-screen { position: relative; height: 45%; border: 3px solid #2f2823; border-radius: 10px; background: #27312f; }
 .mini-movies { position: absolute; inset: auto 8% 8%; display: flex; align-items: end; gap: 2px; }
 .mini-movies i { width: 7px; height: 19px; border: 1px solid #171717; border-radius: 1px; box-shadow: 1px 1px 2px #0008; }
 .console-doors { height: 45%; display: flex; gap: 4px; padding-top: 5px; }
-.console-doors i { flex: 1; border: 1px solid #33261d; background: #70523d; }
+.console-doors i { flex: 1; border: 1px solid #29383b; background: #607378; }
 .radio-stand { position: absolute; right: 5%; bottom: 3%; width: 31%; height: 28%; border-bottom: 6px solid #4d3828; }
 .mini-tapes { position: absolute; left: 4px; right: 4px; top: -4px; display: flex; gap: 2px; }
 .mini-tapes i { width: 18px; height: 11px; border: 1px solid #4d4538; border-radius: 2px; background: linear-gradient(#e8d49f 45%, #665747 46% 66%, #d4b96e 67%); }
