@@ -187,7 +187,7 @@ function App() {
       {loading ? <div className="empty">Loading your library…</div> : visible.length === 0 ?
         <div className="empty">{items.length === 0 ? 'Your library is waiting for its first curiosity. Save a book, question, or passing thought above.' : 'No curiosities match your search and filter.'}</div> :
         view === 'index' ? <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} onEdit={edit} onRemove={remove} />)}</div> : <>
-        <RoomShell />
+        <RoomShell items={items} />
         <div className="collection-library">
           {(filter === 'all' || filter === 'book') && (books.length > 0 ? <section className="visual-collection book-collection">
             <div className="shelf-heading"><div><span>THE BOOKSHELF</span><h3>{normalizedQuery ? `${books.length} matching ${books.length === 1 ? 'book' : 'books'}` : `${books.length} ${books.length === 1 ? 'volume' : 'volumes'}`}</h3></div><p>Select a spine to take a closer look.</p></div>
@@ -266,12 +266,20 @@ function ItemCard({ item, onEdit, onRemove }: { item: Item; onEdit: (item: Item)
   </article>
 }
 
-function RoomShell() {
+function RoomShell({ items }: { items: Item[] }) {
+  const roomItems = (kind: Kind, limit: number) => items.filter(item => item.kind === kind).slice(0, limit)
+  const roomBooks = roomItems('book', 18)
+  const roomMovies = roomItems('movie', 5)
+  const roomPodcasts = roomItems('podcast', 3)
+  const roomArticles = roomItems('article', 4)
+  const roomConcepts = roomItems('concept', 5)
+  const roomQuestions = roomItems('question', 4)
+  const roomThoughts = roomItems('thought', 5)
   return <section className="room-shell" aria-label="Asterisk library room viewed from the doorway">
     <div className="room-glow" />
-    <div className="left-wall"><div className="wall-frame">LISTEN<br />&amp; WATCH</div><div className="media-console"><div className="console-screen" /><div className="console-doors"><i /><i /></div></div><div className="radio-stand"><div className="room-radio"><i /><b /></div></div></div>
-    <div className="back-wall"><div className="room-emblem">✦<small>ASTERISK</small></div><div className="room-bookcase"><div className="case-top" /><div className="case-bays"><i /><i /><i /><i /><i /><i /></div><div className="case-base" /></div><div className="room-catalog"><i /><i /><i /><i /></div></div>
-    <div className="right-wall"><div className="wall-frame right-frame">READ<br />&amp; WONDER</div><div className="room-desk"><div className="desk-top" /><div className="desk-drawers"><i /><i /></div><div className="desk-legs"><i /><i /></div></div><div className="question-crate" /></div>
+    <div className="left-wall"><div className="wall-frame">LISTEN<br />&amp; WATCH</div><div className="media-console"><div className="console-screen"><div className="mini-movies">{roomMovies.map(movie => <i key={movie.id} title={movie.title} style={{ background: coverPalettes[movie.id % coverPalettes.length][0] }} />)}</div></div><div className="console-doors"><i /><i /></div></div><div className="radio-stand"><div className="mini-tapes">{roomPodcasts.map(podcast => <i key={podcast.id} title={podcast.title} />)}</div><div className="room-radio"><i /><b /></div></div></div>
+    <div className="back-wall"><div className="room-emblem">✦<small>ASTERISK</small></div><div className="room-bookcase"><div className="case-top" /><div className="case-bays"><i /><i /><i /><i /><i /><i /></div><div className="miniature-books">{roomBooks.map(book => <i key={book.id} title={book.title} style={{ '--mini-book': spineColors[book.id % spineColors.length], height: `${24 + (book.id % 13)}px` } as React.CSSProperties} />)}</div><div className="case-base" /></div><div className="room-catalog"><i /><i /><i /><i />{roomConcepts.map(concept => <b key={concept.id} title={concept.title}>{concept.title.slice(0, 1)}</b>)}</div></div>
+    <div className="right-wall"><div className="wall-frame right-frame">READ<br />&amp; WONDER</div><div className="room-desk"><div className="mini-papers">{roomArticles.map(article => <i key={article.id} title={article.title} />)}</div><div className="mini-thoughts">{roomThoughts.map(thought => <i key={thought.id} title={thought.title}>✦</i>)}</div><div className="desk-top" /><div className="desk-drawers"><i /><i /></div><div className="desk-legs"><i /><i /></div></div><div className="question-crate"><div className="mini-bulbs">{roomQuestions.map(question => <i key={question.id} title={question.title}>?</i>)}</div></div></div>
     <div className="room-floor"><div className="room-rug"><span>THERE'S MORE<br />TO THE STORY</span></div></div>
     <div className="door-threshold"><span>THE CURIOSITY ROOM</span></div>
   </section>
