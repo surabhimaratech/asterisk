@@ -2,15 +2,25 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 import os
+import shutil
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 from sqlalchemy import DateTime, Integer, String, Text, create_engine, select, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-DB_PATH = Path(__file__).resolve().parents[1] / "curiosity.db"
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = BACKEND_DIR / "data"
+DB_PATH = DATA_DIR / "asterisk.db"
+LEGACY_DB_PATH = BACKEND_DIR / "curiosity.db"
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+configured_database_url = os.getenv("DATABASE_URL")
+if configured_database_url is None and not DB_PATH.exists() and LEGACY_DB_PATH.exists():
+    shutil.copy2(LEGACY_DB_PATH, DB_PATH)
+
+DATABASE_URL = configured_database_url or f"sqlite:///{DB_PATH}"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 SessionLocal = sessionmaker(bind=engine)
 
@@ -23,6 +33,7 @@ class Kind(str, Enum):
     podcast = "podcast"
     article = "article"
     concept = "concept"
+    question = "question"
     thought = "thought"
 
 class CuriosityItem(Base):
@@ -40,11 +51,21 @@ class ItemCreate(BaseModel):
     note: str | None = Field(default=None, max_length=10000)
     url: str | None = Field(default=None, max_length=2000)
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        return normalize_url(value)
+
 class ItemUpdate(BaseModel):
     kind: Kind | None = None
     title: str | None = Field(default=None, min_length=1, max_length=240)
     note: str | None = Field(default=None, max_length=10000)
     url: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        return normalize_url(value)
 
 class ItemRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -54,6 +75,11 @@ class ItemRead(BaseModel):
     note: str | None
     url: str | None
     created_at: datetime
+
+def normalize_url(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return str(TypeAdapter(AnyHttpUrl).validate_python(value.strip()))
 
 def get_db():
     with SessionLocal() as session:
