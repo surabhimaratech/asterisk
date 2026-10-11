@@ -186,7 +186,8 @@ function App() {
 
       {loading ? <div className="empty">Loading your library…</div> : visible.length === 0 ?
         <div className="empty">{items.length === 0 ? 'Your library is waiting for its first curiosity. Save a book, question, or passing thought above.' : 'No curiosities match your search and filter.'}</div> :
-        view === 'index' ? <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} onEdit={edit} onRemove={remove} />)}</div> :
+        view === 'index' ? <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} onEdit={edit} onRemove={remove} />)}</div> : <>
+        <RoomShell />
         <div className="collection-library">
           {(filter === 'all' || filter === 'book') && (books.length > 0 ? <section className="visual-collection book-collection">
             <div className="shelf-heading"><div><span>THE BOOKSHELF</span><h3>{normalizedQuery ? `${books.length} matching ${books.length === 1 ? 'book' : 'books'}` : `${books.length} ${books.length === 1 ? 'volume' : 'volumes'}`}</h3></div><p>Select a spine to take a closer look.</p></div>
@@ -245,7 +246,7 @@ function App() {
           </section> : filter === 'thought' && <CollectionEmpty icon="📝" message="No loose thoughts tucked away yet." action="Capture a passing thought" onAction={() => startCapture('thought')} />)}
 
           {deferredCount > 0 && <div className="index-nudge"><span>✦</span><p><strong>{deferredCount} other {deferredCount === 1 ? 'curiosity is' : 'curiosities are'} nearby.</strong> Their visual collections are still taking shape.</p><button type="button" onClick={() => setView('index')}>View in Index</button></div>}
-        </div>}
+        </div></>}
     </section>
 
     <section className="future"><div>✧ &nbsp;COMING NEXT</div><h2>Sidequests</h2><p>Follow unexpected connections and discover where your curiosity leads.</p><button disabled>✦ Sidequests — coming soon</button></section>
@@ -263,6 +264,17 @@ function ItemCard({ item, onEdit, onRemove }: { item: Item; onEdit: (item: Item)
     {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}
     <div className="item-actions"><button onClick={() => onEdit(item)}>Edit</button><button onClick={() => void onRemove(item)}>Delete</button></div>
   </article>
+}
+
+function RoomShell() {
+  return <section className="room-shell" aria-label="Asterisk library room viewed from the doorway">
+    <div className="room-glow" />
+    <div className="left-wall"><div className="wall-frame">LISTEN<br />&amp; WATCH</div><div className="media-console"><div className="console-screen" /><div className="console-doors"><i /><i /></div></div><div className="radio-stand"><div className="room-radio"><i /><b /></div></div></div>
+    <div className="back-wall"><div className="room-emblem">✦<small>ASTERISK</small></div><div className="room-bookcase"><div className="case-top" /><div className="case-bays"><i /><i /><i /><i /><i /><i /></div><div className="case-base" /></div><div className="room-catalog"><i /><i /><i /><i /></div></div>
+    <div className="right-wall"><div className="wall-frame right-frame">READ<br />&amp; WONDER</div><div className="room-desk"><div className="desk-top" /><div className="desk-drawers"><i /><i /></div><div className="desk-legs"><i /><i /></div></div><div className="question-crate" /></div>
+    <div className="room-floor"><div className="room-rug"><span>THERE'S MORE<br />TO THE STORY</span></div></div>
+    <div className="door-threshold"><span>THE CURIOSITY ROOM</span></div>
+  </section>
 }
 
 function BookDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose: () => void; onEdit: (item: Item) => void; onRemove: (item: Item) => void }) {
