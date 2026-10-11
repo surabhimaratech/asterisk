@@ -10,6 +10,10 @@ const kinds: Kind[] = ['book', 'movie', 'podcast', 'article', 'concept', 'questi
 const icons: Record<Kind, string> = { book: '📚', movie: '🎬', podcast: '🎧', article: '📰', concept: '💡', question: '❓', thought: '✨' }
 const labels: Record<Kind, string> = { book: 'Book', movie: 'Movie', podcast: 'Podcast', article: 'Article', concept: 'Concept', question: 'Question', thought: 'Random thought' }
 const spineColors = ['#9f493e', '#426359', '#c48245', '#5d617d', '#846244', '#66754c', '#764c59', '#3f6475']
+const coverPalettes = [
+  ['#e96b4a', '#301e32'], ['#e7bd57', '#253e48'], ['#78a79a', '#202e3b'], ['#c47d96', '#3d2441'],
+  ['#d6d0b8', '#963f32'], ['#7788aa', '#241e30'], ['#d99959', '#394a38'], ['#a4c5cc', '#733d4b'],
+]
 const empty = { kind: 'book' as Kind, title: '', note: '', url: '' }
 
 async function responseError(response: Response, fallback: string) {
@@ -29,6 +33,7 @@ function App() {
   const [filter, setFilter] = useState<Kind | 'all'>('all')
   const [view, setView] = useState<ViewMode>(() => localStorage.getItem('asterisk-view') === 'index' ? 'index' : 'library')
   const [selectedBook, setSelectedBook] = useState<number | null>(null)
+  const [selectedMovie, setSelectedMovie] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
@@ -89,6 +94,7 @@ function App() {
       if (!response.ok) throw new Error(await responseError(response, 'Could not delete item'))
       if (editing === item.id) { setEditing(null); setForm(empty) }
       if (selectedBook === item.id) setSelectedBook(null)
+      if (selectedMovie === item.id) setSelectedMovie(null)
       await refresh()
       setSuccess('Curiosity deleted.')
       window.setTimeout(() => setSuccess(''), 2500)
@@ -97,9 +103,9 @@ function App() {
     }
   }
 
-  function startBookCapture() {
+  function startCapture(kind: Kind) {
     setEditing(null)
-    setForm({ ...empty, kind: 'book' })
+    setForm({ ...empty, kind })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -109,8 +115,10 @@ function App() {
     `${item.title} ${item.note || ''}`.toLowerCase().includes(normalizedQuery),
   )
   const books = visible.filter(item => item.kind === 'book')
-  const selected = books.find(book => book.id === selectedBook) || null
-  const deferredCount = visible.length - books.length
+  const movies = visible.filter(item => item.kind === 'movie')
+  const selectedBookItem = books.find(book => book.id === selectedBook) || null
+  const selectedMovieItem = movies.find(movie => movie.id === selectedMovie) || null
+  const deferredCount = visible.length - books.length - movies.length
 
   return <main>
     <header>
@@ -159,25 +167,23 @@ function App() {
       {loading ? <div className="empty">Loading your library…</div> : visible.length === 0 ?
         <div className="empty">{items.length === 0 ? 'Your library is waiting for its first curiosity. Save a book, question, or passing thought above.' : 'No curiosities match your search and filter.'}</div> :
         view === 'index' ? <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} onEdit={edit} onRemove={remove} />)}</div> :
-        <div className="book-library">
-          {books.length > 0 ? <>
+        <div className="collection-library">
+          {(filter === 'all' || filter === 'book') && (books.length > 0 ? <section className="visual-collection book-collection">
             <div className="shelf-heading"><div><span>THE BOOKSHELF</span><h3>{normalizedQuery ? `${books.length} matching ${books.length === 1 ? 'book' : 'books'}` : `${books.length} ${books.length === 1 ? 'volume' : 'volumes'}`}</h3></div><p>Select a spine to take a closer look.</p></div>
-            <div className="shelf" aria-label="Bookshelf">
-              <div className="shelf-books">
-                {books.map((book, index) => <button
-                  type="button"
-                  key={book.id}
-                  className={`book-spine ${selectedBook === book.id ? 'selected' : ''}`}
-                  style={{ '--spine-color': spineColors[book.id % spineColors.length], '--book-height': `${172 + ((book.id * 17 + index * 11) % 58)}px`, '--book-width': `${45 + ((book.title.length + book.id) % 24)}px` } as React.CSSProperties}
-                  aria-label={`${book.title}, added ${new Date(book.created_at).toLocaleDateString()}`}
-                  aria-pressed={selectedBook === book.id}
-                  onClick={() => setSelectedBook(selectedBook === book.id ? null : book.id)}
-                ><span className="spine-star">✦</span><span className="spine-title">{book.title}</span></button>)}
-              </div>
-              <div className="shelf-edge" />
-            </div>
-            {selected && <BookDetail item={selected} onClose={() => setSelectedBook(null)} onEdit={edit} onRemove={remove} />}
-          </> : <div className="empty bookshelf-empty"><span>📖</span><strong>No books on this shelf yet.</strong><button type="button" onClick={startBookCapture}>Add your first book</button></div>}
+            <div className="shelf" aria-label="Bookshelf"><div className="shelf-books">
+              {books.map((book, index) => <button type="button" key={book.id} className={`book-spine ${selectedBook === book.id ? 'selected' : ''}`} style={{ '--spine-color': spineColors[book.id % spineColors.length], '--book-height': `${172 + ((book.id * 17 + index * 11) % 58)}px`, '--book-width': `${45 + ((book.title.length + book.id) % 24)}px` } as React.CSSProperties} aria-label={`${book.title}, added ${new Date(book.created_at).toLocaleDateString()}`} aria-pressed={selectedBook === book.id} onClick={() => setSelectedBook(selectedBook === book.id ? null : book.id)}><span className="spine-star">✦</span><span className="spine-title">{book.title}</span></button>)}
+            </div><div className="shelf-edge" /></div>
+            {selectedBookItem && <BookDetail item={selectedBookItem} onClose={() => setSelectedBook(null)} onEdit={edit} onRemove={remove} />}
+          </section> : filter === 'book' && <CollectionEmpty icon="📖" message="No books on this shelf yet." action="Add your first book" onAction={() => startCapture('book')} />)}
+
+          {(filter === 'all' || filter === 'movie') && (movies.length > 0 ? <section className="visual-collection movie-collection">
+            <div className="shelf-heading media-heading"><div><span>THE MEDIA SHELF</span><h3>{normalizedQuery ? `${movies.length} matching ${movies.length === 1 ? 'movie' : 'movies'}` : `${movies.length} ${movies.length === 1 ? 'title' : 'titles'}`}</h3></div><p>Choose a case for tonight's feature.</p></div>
+            <div className="media-shelf" aria-label="Movie shelf"><div className="movie-cases">
+              {movies.map(movie => <MovieCase key={movie.id} item={movie} selected={selectedMovie === movie.id} onSelect={() => setSelectedMovie(selectedMovie === movie.id ? null : movie.id)} />)}
+            </div><div className="media-shelf-edge" /></div>
+            {selectedMovieItem && <MovieDetail item={selectedMovieItem} onClose={() => setSelectedMovie(null)} onEdit={edit} onRemove={remove} />}
+          </section> : filter === 'movie' && <CollectionEmpty icon="🎞️" message="No movies on this shelf yet." action="Add your first movie" onAction={() => startCapture('movie')} />)}
+
           {deferredCount > 0 && <div className="index-nudge"><span>✦</span><p><strong>{deferredCount} other {deferredCount === 1 ? 'curiosity is' : 'curiosities are'} nearby.</strong> Their visual collections are still taking shape.</p><button type="button" onClick={() => setView('index')}>View in Index</button></div>}
         </div>}
     </section>
@@ -211,6 +217,42 @@ function BookDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose: 
       <div className="item-actions"><button onClick={() => onEdit(item)}>Edit this book</button><button onClick={() => void onRemove(item)}>Remove from shelf</button></div>
     </div>
   </article>
+}
+
+function MovieCase({ item, selected, onSelect }: { item: Item; selected: boolean; onSelect: () => void }) {
+  const palette = coverPalettes[item.id % coverPalettes.length]
+  const format = item.id % 3 === 0 ? 'VHS' : 'DVD'
+  return <button
+    type="button"
+    className={`movie-case ${format === 'VHS' ? 'vhs' : ''} ${selected ? 'selected' : ''}`}
+    style={{ '--cover-accent': palette[0], '--cover-ink': palette[1] } as React.CSSProperties}
+    aria-label={`${item.title}, ${format} case, added ${new Date(item.created_at).toLocaleDateString()}`}
+    aria-pressed={selected}
+    onClick={onSelect}
+  >
+    <span className="case-format">{format}</span>
+    <span className="cover-orbit" aria-hidden="true">✦</span>
+    <span className="cover-title">{item.title}</span>
+    <span className="cover-footer">AN ASTERISK SELECTION</span>
+  </button>
+}
+
+function MovieDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose: () => void; onEdit: (item: Item) => void; onRemove: (item: Item) => void }) {
+  return <article className="movie-detail">
+    <button type="button" className="detail-close" aria-label="Close movie details" onClick={onClose}>×</button>
+    <div className="ticket-stub"><span>✦ ASTERISK PICTURES</span><strong>ADMIT ONE</strong><small>{new Date(item.created_at).toLocaleDateString()}</small></div>
+    <div className="movie-detail-copy">
+      <span>MOVIE · FROM THE MEDIA SHELF</span>
+      <h3>{item.title}</h3>
+      {item.note ? <p>{item.note}</p> : <p className="muted">No personal note yet.</p>}
+      {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}
+      <div className="item-actions"><button onClick={() => onEdit(item)}>Edit this movie</button><button onClick={() => void onRemove(item)}>Remove from shelf</button></div>
+    </div>
+  </article>
+}
+
+function CollectionEmpty({ icon, message, action, onAction }: { icon: string; message: string; action: string; onAction: () => void }) {
+  return <div className="empty collection-empty"><span>{icon}</span><strong>{message}</strong><button type="button" onClick={onAction}>{action}</button></div>
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
