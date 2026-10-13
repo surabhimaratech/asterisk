@@ -160,6 +160,12 @@ def ai_http_error(exc: Exception) -> HTTPException:
         return HTTPException(503, str(exc))
     return HTTPException(502, str(exc))
 
+def sidequest_rejection_detail(reason: str | None = None) -> str:
+    guidance = "Try adding more specific notes or concepts to each curiosity, then try again."
+    if reason and reason.strip():
+        return f"Asterisk found possible links, but none were strong enough to save as a Sidequest. {reason.strip()} {guidance}"
+    return f"Asterisk did not find a connection strong enough to save as a Sidequest. {guidance}"
+
 def sidequest_read(sidequest: Sidequest, db: Session) -> SidequestRead:
     item_a = db.get(CuriosityItem, sidequest.item_a_id)
     item_b = db.get(CuriosityItem, sidequest.item_b_id)
@@ -267,9 +273,9 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc
     if not final.accepted or frozenset((final.item_a_id, final.item_b_id)) not in allowed_pairs:
-        raise HTTPException(422, final.rejection_reason or "No candidate was strong enough for a Sidequest.")
+        raise HTTPException(422, sidequest_rejection_detail(final.rejection_reason))
     if len(final.bridge.strip()) < 12 or len(final.where_it_breaks.strip()) < 20:
-        raise HTTPException(422, "The connection was too superficial to save as a Sidequest.")
+        raise HTTPException(422, sidequest_rejection_detail("The proposed connection was too broad or did not explain its limitations clearly enough."))
     sidequest = Sidequest(
         item_a_id=final.item_a_id, item_b_id=final.item_b_id, title=final.title.strip(),
         connection=final.connection.strip(), bridge=final.bridge.strip(), why_interesting=final.why_interesting.strip(),

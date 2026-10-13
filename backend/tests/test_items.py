@@ -206,9 +206,25 @@ def test_sidequest_insufficient_data_and_rejected_candidate(client: TestClient) 
     app.dependency_overrides[get_ai_client] = lambda: fake
     rejected = client.post("/api/sidequests/surprise")
     assert rejected.status_code == 422
-    assert rejected.json()["detail"] == "Too superficial"
+    assert "none were strong enough" in rejected.json()["detail"]
+    assert "Too superficial" in rejected.json()["detail"]
+    assert "more specific notes or concepts" in rejected.json()["detail"]
 
 
 def test_llm_response_models_reject_invalid_categories() -> None:
     with pytest.raises(ValueError):
         ExtractedConcept(name="Anything", category="unsupported", explanation="No")  # type: ignore[arg-type]
+
+
+def test_llm_response_models_reject_extra_fields_and_excess_concepts() -> None:
+    with pytest.raises(ValueError):
+        ExtractedConcept.model_validate({
+            "name": "Emergence", "category": "mechanism", "explanation": "A pattern forms.", "confidence": 0.9,
+        })
+
+    concepts = [
+        {"name": f"Concept {index}", "category": "general", "explanation": "A careful inference."}
+        for index in range(7)
+    ]
+    with pytest.raises(ValueError):
+        ConceptExtraction.model_validate({"concepts": concepts})

@@ -76,7 +76,7 @@ cp .env.example .env
 
 Concept extraction is always user-triggered. Re-extraction replaces earlier AI suggestions but preserves manually added concepts. Asterisk sends the selected item's type, title, note, and URL string to the configured provider; it does not retrieve the URL or claim to have read its content.
 
-Sidequests require concepts on at least two items of different types. The experimental pipeline selects candidate pairs, generates possible connections, critiques them, rejects weak results, and persists the strongest accepted result. Every saved Sidequest is labeled exploratory and externally unverified.
+Sidequests require concepts attached to at least two library items of different types. In the Sidequests section, choose a curiosity and use **Add concepts** to generate suggestions or write your own; repeat this for a different item type to unlock **Surprise Me**. A “concept” here is a theme attached to any curiosity, not only an item saved with the Concept type. The experimental pipeline selects candidate pairs, generates possible connections, critiques them, rejects weak results, and persists the strongest accepted result. Every saved Sidequest is labeled exploratory and externally unverified.
 
 ## Tests
 

@@ -43,6 +43,7 @@ function App() {
   const [selectedQuestion, setSelectedQuestion] = useState<number | null>(null)
   const [selectedThought, setSelectedThought] = useState<number | null>(null)
   const [conceptItem, setConceptItem] = useState<Item | null>(null)
+  const [conceptCounts, setConceptCounts] = useState<Record<number, number>>({})
   const [sidequests, setSidequests] = useState<Sidequest[]>([])
   const [sidequestBusy, setSidequestBusy] = useState(false)
   const [error, setError] = useState('')
@@ -75,6 +76,17 @@ function App() {
   }
 
   useEffect(() => { void refreshSidequests() }, [])
+
+  useEffect(() => {
+    if (items.length === 0) { setConceptCounts({}); return }
+    let cancelled = false
+    void Promise.all(items.map(async item => {
+      const response = await fetch(`/api/items/${item.id}/concepts`)
+      return [item.id, response.ok ? ((await response.json()) as ItemConcept[]).length : 0] as const
+    })).then(entries => { if (!cancelled) setConceptCounts(Object.fromEntries(entries)) })
+      .catch(() => { /* Readiness is helpful context, not required for using the library. */ })
+    return () => { cancelled = true }
+  }, [items])
 
   async function save(event: React.FormEvent) {
     event.preventDefault()
@@ -302,9 +314,9 @@ function App() {
     </section>
 
     {selectedItem && <div className="concept-callout"><span>✦ Look beneath the surface</span><button type="button" onClick={() => exploreConcepts(selectedItem)}>Explore Concepts</button></div>}
-    {conceptItem && <ConceptExplorer item={conceptItem} onClose={() => setConceptItem(null)} onError={setError} />}
+    {conceptItem && <ConceptExplorer item={conceptItem} onClose={() => setConceptItem(null)} onError={setError} onChange={count => setConceptCounts(current => ({ ...current, [conceptItem.id]: count }))} />}
 
-    <SidequestsView sidequests={sidequests} busy={sidequestBusy} onSurprise={() => void surpriseMe()} />
+    <SidequestsView items={items} conceptCounts={conceptCounts} sidequests={sidequests} busy={sidequestBusy} onExplore={exploreConcepts} onSurprise={() => void surpriseMe()} />
     {error && <div className="error" role="alert">{error}</div>}
     {success && <div className="success" role="status">{success}</div>}
     <footer>Asterisk · v0.2 · Your curiosity belongs to you.</footer>
@@ -479,7 +491,7 @@ function ThoughtDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClos
   </article>
 }
 
-function ConceptExplorer({ item, onClose, onError }: { item: Item; onClose: () => void; onError: (message: string) => void }) {
+function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onClose: () => void; onError: (message: string) => void; onChange: (count: number) => void }) {
   const [concepts, setConcepts] = useState<ItemConcept[]>([])
   const [loading, setLoading] = useState(true)
   const [extracting, setExtracting] = useState(false)
@@ -491,7 +503,9 @@ function ConceptExplorer({ item, onClose, onError }: { item: Item; onClose: () =
     try {
       const response = await fetch(`/api/items/${item.id}/concepts`)
       if (!response.ok) throw new Error(await responseError(response, 'Could not load concepts'))
-      setConcepts(await response.json())
+      const loaded = await response.json()
+      setConcepts(loaded)
+      onChange(loaded.length)
     } catch (caught) { onError(caught instanceof Error ? caught.message : 'Could not load concepts') }
     finally { setLoading(false) }
   }
@@ -504,7 +518,9 @@ function ConceptExplorer({ item, onClose, onError }: { item: Item; onClose: () =
     try {
       const response = await fetch(`/api/items/${item.id}/concepts/extract`, { method: 'POST' })
       if (!response.ok) throw new Error(await responseError(response, 'Concept extraction failed'))
-      setConcepts(await response.json())
+      const extracted = await response.json()
+      setConcepts(extracted)
+      onChange(extracted.length)
     } catch (caught) { onError(caught instanceof Error ? caught.message : 'Concept extraction failed') }
     finally { setExtracting(false) }
   }
@@ -516,6 +532,7 @@ function ConceptExplorer({ item, onClose, onError }: { item: Item; onClose: () =
     if (!response.ok) { onError(await responseError(response, 'Could not add concept')); return }
     const created = await response.json()
     setConcepts(current => [...current, created])
+    onChange(concepts.length + 1)
     setName('')
   }
 
@@ -523,23 +540,32 @@ function ConceptExplorer({ item, onClose, onError }: { item: Item; onClose: () =
     const response = await fetch(`/api/concepts/${concept.id}`, { method: 'DELETE' })
     if (!response.ok) { onError(await responseError(response, 'Could not remove concept')); return }
     setConcepts(current => current.filter(entry => entry.id !== concept.id))
+    onChange(Math.max(0, concepts.length - 1))
   }
 
   return <section className="concept-workbench" id="concept-workbench">
     <button className="detail-close" type="button" aria-label="Close concept explorer" onClick={onClose}>×</button>
-    <div className="concept-intro"><span>✦ CONCEPT EXPLORER</span><h2>{item.title}</h2><p>AI suggestions are inferences, kept separate from your original note. Asterisk does not retrieve or read the linked source.</p></div>
+    <div className="concept-intro"><span>✦ CONCEPT EXPLORER</span><h2>{item.title}</h2><p>Concepts are the themes and ideas Sidequests can connect to other curiosities. Let Asterisk suggest them, or add your own. AI suggestions stay separate from your original note.</p></div>
     <div className="concept-actions"><button className="primary" type="button" disabled={extracting} onClick={() => void extract()}>{extracting ? 'Looking beneath the surface…' : concepts.some(concept => concept.origin === 'ai') ? '↻ Re-extract concepts' : '✦ Explore Concepts'}</button></div>
     {loading ? <p className="muted">Opening the concept drawer…</p> : concepts.length === 0 ? <div className="concept-empty">No concepts yet. Ask Asterisk to explore, or add one in your own words.</div> : <div className="concept-list">{concepts.map(concept => <article className={`concept-chip ${concept.origin}`} key={concept.id}>
       <div><span>{concept.origin === 'ai' ? 'AI-INFERRED' : 'YOUR CONCEPT'} · {concept.category}</span><strong>{concept.name}</strong>{concept.explanation && <p>{concept.explanation}</p>}</div>
       <button type="button" aria-label={`Remove ${concept.name}`} onClick={() => void remove(concept)}>×</button>
     </article>)}</div>}
-    <form className="manual-concept" onSubmit={add}><label htmlFor="manual-concept-name">Add your own concept</label><div><input id="manual-concept-name" maxLength={120} placeholder="A principle, theme, or personal idea" value={name} onChange={event => setName(event.target.value)} /><select aria-label="Concept category" value={category} onChange={event => setCategory(event.target.value as ItemConcept['category'])}><option value="personal">Personal</option><option value="general">General theme</option><option value="mechanism">Mechanism</option></select><button disabled={!name.trim()}>Add</button></div></form>
+    <form className="manual-concept" onSubmit={add}><label htmlFor="manual-concept-name">Add a concept for Sidequests</label><div><input id="manual-concept-name" maxLength={120} placeholder="A theme, principle, or underlying mechanism" value={name} onChange={event => setName(event.target.value)} /><select aria-label="Concept category" value={category} onChange={event => setCategory(event.target.value as ItemConcept['category'])}><option value="personal">Personal</option><option value="general">General theme</option><option value="mechanism">Mechanism</option></select><button disabled={!name.trim()}>Add concept</button></div></form>
   </section>
 }
 
-function SidequestsView({ sidequests, busy, onSurprise }: { sidequests: Sidequest[]; busy: boolean; onSurprise: () => void }) {
-  return <section className="sidequests"><div className="sidequest-head"><div><span>03 / DISCOVER</span><h2>Sidequests</h2><p>Unexpected bridges between things that made you curious.</p></div><button className="surprise-button" type="button" disabled={busy} onClick={onSurprise}>{busy ? '✦ Following a thread…' : '✦ Surprise Me'}</button></div>
-    {sidequests.length === 0 ? <div className="sidequest-empty"><strong>No Sidequests yet.</strong><p>Explore concepts on at least two different kinds of curiosities, then ask Asterisk to surprise you.</p></div> : <div className="sidequest-stack">{sidequests.map(sidequest => <article className="sidequest-card" key={sidequest.id}>
+function SidequestsView({ items, conceptCounts, sidequests, busy, onExplore, onSurprise }: { items: Item[]; conceptCounts: Record<number, number>; sidequests: Sidequest[]; busy: boolean; onExplore: (item: Item) => void; onSurprise: () => void }) {
+  const prepared = items.filter(item => (conceptCounts[item.id] || 0) > 0)
+  const ready = new Set(prepared.map(item => item.kind)).size >= 2
+  return <section className="sidequests" id="sidequests"><div className="sidequest-head"><div><span>03 / DISCOVER</span><h2>Sidequests</h2><p>Unexpected bridges between things that made you curious.</p></div><button className="surprise-button" type="button" disabled={busy || !ready} onClick={onSurprise}>{busy ? '✦ Following a thread…' : ready ? '✦ Surprise Me' : 'Prepare two curiosities'}</button></div>
+    <div className="sidequest-setup">
+      <div className="sidequest-explainer"><span>HOW IT WORKS</span><strong>Add concepts to two different kinds of curiosities.</strong><p>A concept is simply a theme or idea inside an item—not the “Concept” item type. Sidequests uses these as stepping stones between your interests.</p></div>
+      <div className="sidequest-steps" aria-label="Sidequest readiness"><span className={items.length ? 'done' : ''}><b>1</b> Save curiosities</span><span className={ready ? 'done' : ''}><b>2</b> Add concepts to two types</span><span className={ready ? 'done' : ''}><b>3</b> Ask to be surprised</span></div>
+      {items.length === 0 ? <p className="sidequest-guidance">Save your first curiosity above to begin.</p> : <div className="sidequest-sources"><div className="sidequest-source-head"><strong>Choose curiosities to connect</strong><span>{prepared.length} of {items.length} prepared</span></div><div className="sidequest-source-list">{items.map(item => <article className={(conceptCounts[item.id] || 0) > 0 ? 'prepared' : ''} key={item.id}><span className="source-icon">{icons[item.kind]}</span><div><strong>{item.title}</strong><small>{labels[item.kind]} · {(conceptCounts[item.id] || 0) === 0 ? 'No concepts yet' : `${conceptCounts[item.id]} ${(conceptCounts[item.id] || 0) === 1 ? 'concept' : 'concepts'}`}</small></div><button type="button" onClick={() => onExplore(item)}>{(conceptCounts[item.id] || 0) > 0 ? 'View concepts' : 'Add concepts'}</button></article>)}</div></div>}
+      {!ready && prepared.length > 0 && <p className="sidequest-guidance">Nice start. Add concepts to a curiosity of a different type to unlock Sidequests.</p>}
+    </div>
+    {sidequests.length === 0 ? <div className="sidequest-empty"><strong>{ready ? 'You’re ready for your first Sidequest.' : 'No Sidequests yet.'}</strong><p>{ready ? 'Your curiosities have enough stepping stones. Ask Asterisk to find an unexpected connection.' : 'Use the guide above to prepare two curiosities.'}</p></div> : <div className="sidequest-stack">{sidequests.map(sidequest => <article className="sidequest-card" key={sidequest.id}>
       <div className="evidence-label">✧ {sidequest.evidence_status}</div><h3>{sidequest.title}</h3><div className="connected-items"><span>{sidequest.item_a_title}</span><b>✦</b><span>{sidequest.item_b_title}</span></div>
       <div className="sidequest-section"><h4>The unexpected connection</h4><p>{sidequest.connection}</p></div>
       <div className="sidequest-grid"><div><h4>The bridge</h4><p>{sidequest.bridge}</p></div><div><h4>Why it’s interesting</h4><p>{sidequest.why_interesting}</p></div><div><h4>Where it breaks</h4><p>{sidequest.where_it_breaks}</p></div><div className="new-question"><h4>A new question</h4><p>{sidequest.new_question}</p></div></div>
