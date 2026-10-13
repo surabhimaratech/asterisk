@@ -14,7 +14,7 @@ from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, Uniqu
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .ai import AIConfigurationError, AIProviderError, OpenRouterClient, get_ai_client
-from .quality import deterministic_rejection_reason
+from .quality import concept_quality_rejection, deterministic_rejection_reason
 from .research import ResearchProvider, get_research_provider
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -52,10 +52,23 @@ class CuriosityItem(Base):
     url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+class CanonicalConcept(Base):
+    __tablename__ = "canonical_concepts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    normalized_name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    definition: Mapped[str] = mapped_column(Text)
+    domain: Mapped[str] = mapped_column(String(120))
+    mechanism: Mapped[str] = mapped_column(Text)
+    verification_status: Mapped[str] = mapped_column(String(30))
+    provenance: Mapped[str] = mapped_column(String(20), default="ai")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
 class ItemConcept(Base):
     __tablename__ = "item_concepts"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     item_id: Mapped[int] = mapped_column(ForeignKey("curiosity_items.id"), index=True)
+    canonical_concept_id: Mapped[int | None] = mapped_column(ForeignKey("canonical_concepts.id"), index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(120))
     category: Mapped[str] = mapped_column(String(20))
     origin: Mapped[str] = mapped_column(String(20))
@@ -64,6 +77,14 @@ class ItemConcept(Base):
     relationship: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    canonical_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    definition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    mechanism: Mapped[str | None] = mapped_column(Text, nullable=True)
+    relationship_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    relationship_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    concept_verification: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    relationship_verification: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class Sidequest(Base):
@@ -112,6 +133,21 @@ class ConceptSource(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     concept_id: Mapped[int] = mapped_column(ForeignKey("item_concepts.id"), index=True)
     source_id: Mapped[int] = mapped_column(ForeignKey("research_sources.id"), index=True)
+    support_kind: Mapped[str] = mapped_column(String(20), default="relationship")
+
+class ConceptLeadAudit(Base):
+    __tablename__ = "concept_lead_audits"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("curiosity_items.id"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    proposed_definition: Mapped[str] = mapped_column(Text)
+    motivating_detail: Mapped[str] = mapped_column(Text)
+    proposed_relationship: Mapped[str] = mapped_column(Text)
+    relationship_type: Mapped[str] = mapped_column(String(20))
+    research_questions_json: Mapped[str] = mapped_column(Text, default="[]")
+    accepted: Mapped[bool] = mapped_column(default=False)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class ItemCreate(BaseModel):
     kind: Kind
@@ -162,6 +198,7 @@ class ConceptRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     item_id: int
+    canonical_concept_id: int | None
     name: str
     category: ConceptCategory
     origin: ConceptOrigin
@@ -171,6 +208,14 @@ class ConceptRead(BaseModel):
     evidence_status: str | None
     confidence: float | None
     source_ids: list[int] = Field(default_factory=list)
+    canonical_name: str | None
+    definition: str | None
+    domain: str | None
+    mechanism: str | None
+    relationship_type: str | None
+    relationship_evidence: str | None
+    concept_verification: str | None
+    relationship_verification: str | None
     created_at: datetime
 
 class SidequestRead(BaseModel):
@@ -211,6 +256,7 @@ class EnrichmentRead(BaseModel):
     researched_at: datetime | None
     sources: list[ResearchSourceRead]
     concepts: list[ConceptRead]
+    rejected_leads: list[dict[str, str | bool]] = Field(default_factory=list)
 
 class EnrichmentRequest(BaseModel):
     identity_hint: str | None = Field(default=None, max_length=500)
@@ -231,8 +277,9 @@ def migrate_additive_columns() -> None:
     if not DATABASE_URL.startswith("sqlite"):
         return
     additions = {
-        "item_concepts": {"level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(20)", "confidence": "FLOAT"},
+        "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(20)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "relationship_verification": "VARCHAR(30)"},
         "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'"},
+        "concept_sources": {"support_kind": "VARCHAR(20) NOT NULL DEFAULT 'relationship'"},
     }
     with engine.begin() as connection:
         schema = inspect(connection)
@@ -271,16 +318,21 @@ def sidequest_read(sidequest: Sidequest, db: Session) -> SidequestRead:
 def concept_read(concept: ItemConcept, db: Session) -> ConceptRead:
     source_ids = list(db.scalars(select(ConceptSource.source_id).where(ConceptSource.concept_id == concept.id)).all())
     return ConceptRead(
-        id=concept.id, item_id=concept.item_id, name=concept.name, category=concept.category,
+        id=concept.id, item_id=concept.item_id, canonical_concept_id=concept.canonical_concept_id, name=concept.name, category=concept.category,
         origin=concept.origin, explanation=concept.explanation, level=concept.level,
         relationship=concept.relationship, evidence_status=concept.evidence_status,
         confidence=concept.confidence, source_ids=source_ids, created_at=concept.created_at,
+        canonical_name=concept.canonical_name, definition=concept.definition, domain=concept.domain,
+        mechanism=concept.mechanism, relationship_type=concept.relationship_type,
+        relationship_evidence=concept.relationship_evidence, concept_verification=concept.concept_verification,
+        relationship_verification=concept.relationship_verification,
     )
 
 def enrichment_read(item_id: int, db: Session) -> EnrichmentRead:
     enrichment = db.get(ItemEnrichment, item_id)
     sources = db.scalars(select(ResearchSource).where(ResearchSource.item_id == item_id).order_by(ResearchSource.id)).all()
     concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id).order_by(ItemConcept.created_at, ItemConcept.id)).all()
+    rejected = db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id, ConceptLeadAudit.accepted == False).order_by(ConceptLeadAudit.id)).all()  # noqa: E712
     return EnrichmentRead(
         status=enrichment.status if enrichment else "not_researched",
         resolved_title=enrichment.resolved_title if enrichment else None, creator=enrichment.creator if enrichment else None,
@@ -288,6 +340,7 @@ def enrichment_read(item_id: int, db: Session) -> EnrichmentRead:
         confirmation_question=enrichment.confirmation_question if enrichment else None,
         researched_at=enrichment.researched_at if enrichment else None,
         sources=list(sources), concepts=[concept_read(concept, db) for concept in concepts],
+        rejected_leads=[{"name": lead.name, "accepted": lead.accepted, "rejection_reason": lead.rejection_reason or "Rejected by quality review"} for lead in rejected],
     )
 
 @app.get("/api/health")
@@ -370,55 +423,92 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
     payload = {"kind": item.kind, "title": item.title, "note": item.note, "url": item.url, "identity_hint": data.identity_hint if data else None}
     try:
         packet = research.research(payload)
-        source_payloads = [{"url": source.url, "title": source.title, "excerpt": source.excerpt[:2500]} for source in packet.sources]
-        analysis = ai.analyze_research(payload, packet.synthesis, source_payloads)
+        work_source_payloads = [{"url": source.url, "title": source.title, "excerpt": source.excerpt[:2500]} for source in packet.sources]
+        understanding = ai.understand_work(payload, packet.synthesis, work_source_payloads)
+        if item.kind in {Kind.concept.value, Kind.question.value, Kind.thought.value}:
+            understanding = understanding.model_copy(update={"ambiguous_identity": False, "confirmation_question": "", "resolved_title": understanding.resolved_title or item.title})
+        leads = ai.generate_conceptual_leads(understanding)
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc
 
     identity_confirmed = bool(data and data.identity_hint and data.identity_hint.strip())
-    if analysis.ambiguous_identity and identity_confirmed:
+    if understanding.ambiguous_identity and identity_confirmed:
         raise HTTPException(502, "The analysis did not honor the confirmed identity. Existing research was preserved; please retry.")
-    if analysis.ambiguous_identity and not identity_confirmed:
+    if understanding.ambiguous_identity and not identity_confirmed:
         enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="needs_confirmation")
         enrichment.status = "needs_confirmation"
-        enrichment.confirmation_question = analysis.confirmation_question or "Please add identifying details to the title or note, then refresh research."
+        enrichment.confirmation_question = understanding.confirmation_question or "Please add identifying details to the title or note, then refresh research."
         enrichment.researched_at = datetime.now(timezone.utc)
         db.add(enrichment)
         db.commit()
         return enrichment_read(item_id, db)
 
+    try:
+        concept_packet = research.research_concepts(payload, [lead.model_dump() for lead in leads.leads])
+        concept_source_payloads = [{"url": source.url, "title": source.title, "excerpt": source.excerpt[:2200]} for source in concept_packet.sources]
+        validation = ai.validate_concepts(understanding, leads, work_source_payloads, concept_packet.synthesis, concept_source_payloads)
+    except (AIConfigurationError, AIProviderError) as exc:
+        raise ai_http_error(exc) from exc
+
     db.execute(delete(ConceptSource).where(ConceptSource.concept_id.in_(select(ItemConcept.id).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai"))))
     db.execute(delete(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai"))
     db.execute(delete(ResearchSource).where(ResearchSource.item_id == item_id))
-    unique_sources = {source.url: source for source in packet.sources if source.url}
+    db.execute(delete(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id))
+    unique_sources = {source.url: (source, "work") for source in packet.sources if source.url}
+    for source in concept_packet.sources:
+        if source.url:
+            unique_sources[source.url] = (source, "concept")
     saved_sources: dict[str, ResearchSource] = {}
-    for source in unique_sources.values():
-        saved = ResearchSource(item_id=item_id, url=source.url, title=source.title[:500], publisher=urlparse(source.url).netloc or None, excerpt=source.excerpt[:2500])
+    for source, source_type in unique_sources.values():
+        saved = ResearchSource(item_id=item_id, url=source.url, title=source.title[:500], publisher=urlparse(source.url).netloc or None, source_type=source_type, excerpt=source.excerpt[:2500])
         db.add(saved)
         db.flush()
         saved_sources[source.url] = saved
     enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="researched")
     enrichment.status = "researched"
-    enrichment.resolved_title = analysis.resolved_title or None
-    enrichment.creator = analysis.creator or None
-    enrichment.release_info = analysis.release_info or None
-    enrichment.identity_summary = analysis.identity_summary or None
-    enrichment.confirmation_question = analysis.confirmation_question or None
+    enrichment.resolved_title = understanding.resolved_title or None
+    enrichment.creator = understanding.creator or None
+    enrichment.release_info = understanding.release_info or None
+    enrichment.identity_summary = understanding.identity_summary or None
+    enrichment.confirmation_question = understanding.confirmation_question or None
     enrichment.researched_at = datetime.now(timezone.utc)
     db.add(enrichment)
-    if not analysis.ambiguous_identity:
+    work_urls = {source.url for source in packet.sources}
+    concept_urls = {source.url for source in concept_packet.sources}
+    concept_source_text = {source.url: f"{source.title} {source.excerpt}" for source in concept_packet.sources}
+    for result in validation.results:
+        if result.accepted and (quality_reason := concept_quality_rejection(result, work_urls, concept_urls, concept_source_text)):
+            result.accepted = False
+            result.rejection_reason = quality_reason
+    results_by_lead = {result.lead_name.strip().casefold(): result for result in validation.results}
+    for lead in leads.leads:
+        result = results_by_lead.get(lead.name.strip().casefold())
+        db.add(ConceptLeadAudit(item_id=item_id, name=lead.name, proposed_definition=lead.proposed_definition, motivating_detail=lead.motivating_detail, proposed_relationship=lead.proposed_relationship, relationship_type=lead.relationship_type, research_questions_json=json.dumps(lead.research_questions), accepted=bool(result and result.accepted), rejection_reason=None if result and result.accepted else (result.rejection_reason if result else "The validation stage did not return this lead.")))
+    if not understanding.ambiguous_identity:
         seen_concepts: set[str] = set()
-        for extracted in analysis.concepts:
-            normalized_name = extracted.name.strip().casefold()
+        for extracted in validation.results:
+            if not extracted.accepted:
+                continue
+            normalized_name = extracted.canonical_name.strip().casefold()
             if normalized_name in seen_concepts:
                 continue
             seen_concepts.add(normalized_name)
-            concept = ItemConcept(item_id=item_id, name=extracted.name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.explanation, level=extracted.level, relationship=extracted.relationship, evidence_status=extracted.evidence_status, confidence=extracted.confidence)
+            canonical = db.scalar(select(CanonicalConcept).where(CanonicalConcept.normalized_name == normalized_name))
+            if canonical is None:
+                canonical = CanonicalConcept(normalized_name=normalized_name, name=extracted.canonical_name.strip(), definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, verification_status=extracted.concept_verification, provenance="ai")
+                db.add(canonical)
+                db.flush()
+            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence)
             db.add(concept)
             db.flush()
-            for url in dict.fromkeys(extracted.source_urls):
+            support_by_url: dict[str, set[str]] = {}
+            for url in extracted.concept_source_urls:
+                support_by_url.setdefault(url, set()).add("concept")
+            for url in extracted.relationship_source_urls:
+                support_by_url.setdefault(url, set()).add("relationship")
+            for url, support_kinds in support_by_url.items():
                 if url in saved_sources:
-                    db.add(ConceptSource(concept_id=concept.id, source_id=saved_sources[url].id))
+                    db.add(ConceptSource(concept_id=concept.id, source_id=saved_sources[url].id, support_kind="both" if len(support_kinds) > 1 else next(iter(support_kinds))))
     db.commit()
     return enrichment_read(item_id, db)
 
