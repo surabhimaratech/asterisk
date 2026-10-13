@@ -2,16 +2,20 @@ from datetime import datetime, timezone
 from enum import Enum
 from itertools import combinations
 from pathlib import Path
+from urllib.parse import urlparse
+import json
 import os
 import shutil
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, field_validator
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, create_engine, delete, select, or_
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, delete, inspect, select, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .ai import AIConfigurationError, AIProviderError, OpenRouterClient, get_ai_client
+from .quality import deterministic_rejection_reason
+from .research import ResearchProvider, get_research_provider
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BACKEND_DIR / "data"
@@ -56,6 +60,10 @@ class ItemConcept(Base):
     category: Mapped[str] = mapped_column(String(20))
     origin: Mapped[str] = mapped_column(String(20))
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    relationship: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class Sidequest(Base):
@@ -70,7 +78,40 @@ class Sidequest(Base):
     where_it_breaks: Mapped[str] = mapped_column(Text)
     new_question: Mapped[str] = mapped_column(String(400))
     evidence_status: Mapped[str] = mapped_column(String(240))
+    concepts_json: Mapped[str] = mapped_column(Text, default="[]")
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class ItemEnrichment(Base):
+    __tablename__ = "item_enrichments"
+    item_id: Mapped[int] = mapped_column(ForeignKey("curiosity_items.id"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(30))
+    resolved_title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    creator: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    release_info: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    identity_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confirmation_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    researched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class ResearchSource(Base):
+    __tablename__ = "research_sources"
+    __table_args__ = (UniqueConstraint("item_id", "url", name="uq_research_source_item_url"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("curiosity_items.id"), index=True)
+    url: Mapped[str] = mapped_column(String(2000))
+    title: Mapped[str] = mapped_column(String(500))
+    publisher: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(40), default="web")
+    excerpt: Mapped[str] = mapped_column(Text)
+    retrieval_status: Mapped[str] = mapped_column(String(30), default="retrieved")
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class ConceptSource(Base):
+    __tablename__ = "concept_sources"
+    __table_args__ = (UniqueConstraint("concept_id", "source_id", name="uq_concept_source"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    concept_id: Mapped[int] = mapped_column(ForeignKey("item_concepts.id"), index=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("research_sources.id"), index=True)
 
 class ItemCreate(BaseModel):
     kind: Kind
@@ -125,6 +166,11 @@ class ConceptRead(BaseModel):
     category: ConceptCategory
     origin: ConceptOrigin
     explanation: str | None
+    level: str | None
+    relationship: str | None
+    evidence_status: str | None
+    confidence: float | None
+    source_ids: list[int] = Field(default_factory=list)
     created_at: datetime
 
 class SidequestRead(BaseModel):
@@ -140,7 +186,31 @@ class SidequestRead(BaseModel):
     where_it_breaks: str
     new_question: str
     evidence_status: str
+    concepts_used: list[str]
+    evidence: list[str]
     created_at: datetime
+
+class ResearchSourceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    url: str
+    title: str
+    publisher: str | None
+    source_type: str
+    excerpt: str
+    retrieval_status: str
+    retrieved_at: datetime
+
+class EnrichmentRead(BaseModel):
+    status: str
+    resolved_title: str | None
+    creator: str | None
+    release_info: str | None
+    identity_summary: str | None
+    confirmation_question: str | None
+    researched_at: datetime | None
+    sources: list[ResearchSourceRead]
+    concepts: list[ConceptRead]
 
 def normalize_url(value: str | None) -> str | None:
     if value is None or not value.strip():
@@ -152,6 +222,24 @@ def get_db():
         yield session
 
 Base.metadata.create_all(bind=engine)
+
+def migrate_additive_columns() -> None:
+    """Small additive migration runner for existing local SQLite databases."""
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    additions = {
+        "item_concepts": {"level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(20)", "confidence": "FLOAT"},
+        "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'"},
+    }
+    with engine.begin() as connection:
+        schema = inspect(connection)
+        for table, columns in additions.items():
+            existing = {column["name"] for column in schema.get_columns(table)}
+            for name, definition in columns.items():
+                if name not in existing:
+                    connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+migrate_additive_columns()
 app = FastAPI(title="Asterisk", description="There's more to the story.", version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -173,6 +261,30 @@ def sidequest_read(sidequest: Sidequest, db: Session) -> SidequestRead:
         **{column.name: getattr(sidequest, column.name) for column in Sidequest.__table__.columns},
         item_a_title=item_a.title if item_a else "Deleted curiosity",
         item_b_title=item_b.title if item_b else "Deleted curiosity",
+        concepts_used=json.loads(sidequest.concepts_json or "[]"),
+        evidence=json.loads(sidequest.evidence_json or "[]"),
+    )
+
+def concept_read(concept: ItemConcept, db: Session) -> ConceptRead:
+    source_ids = list(db.scalars(select(ConceptSource.source_id).where(ConceptSource.concept_id == concept.id)).all())
+    return ConceptRead(
+        id=concept.id, item_id=concept.item_id, name=concept.name, category=concept.category,
+        origin=concept.origin, explanation=concept.explanation, level=concept.level,
+        relationship=concept.relationship, evidence_status=concept.evidence_status,
+        confidence=concept.confidence, source_ids=source_ids, created_at=concept.created_at,
+    )
+
+def enrichment_read(item_id: int, db: Session) -> EnrichmentRead:
+    enrichment = db.get(ItemEnrichment, item_id)
+    sources = db.scalars(select(ResearchSource).where(ResearchSource.item_id == item_id).order_by(ResearchSource.id)).all()
+    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id).order_by(ItemConcept.created_at, ItemConcept.id)).all()
+    return EnrichmentRead(
+        status=enrichment.status if enrichment else "not_researched",
+        resolved_title=enrichment.resolved_title if enrichment else None, creator=enrichment.creator if enrichment else None,
+        release_info=enrichment.release_info if enrichment else None, identity_summary=enrichment.identity_summary if enrichment else None,
+        confirmation_question=enrichment.confirmation_question if enrichment else None,
+        researched_at=enrichment.researched_at if enrichment else None,
+        sources=list(sources), concepts=[concept_read(concept, db) for concept in concepts],
     )
 
 @app.get("/api/health")
@@ -203,7 +315,8 @@ def create_item(data: ItemCreate, db: Session = Depends(get_db)):
 def list_concepts(item_id: int, db: Session = Depends(get_db)):
     if db.get(CuriosityItem, item_id) is None:
         raise HTTPException(404, "Item not found")
-    return db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id).order_by(ItemConcept.created_at, ItemConcept.id)).all()
+    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id).order_by(ItemConcept.created_at, ItemConcept.id)).all()
+    return [concept_read(concept, db) for concept in concepts]
 
 @app.post("/api/items/{item_id}/concepts", response_model=ConceptRead, status_code=201)
 def add_concept(item_id: int, data: ConceptCreate, db: Session = Depends(get_db)):
@@ -240,6 +353,69 @@ def extract_concepts(item_id: int, db: Session = Depends(get_db), ai: OpenRouter
     db.commit()
     return db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id).order_by(ItemConcept.created_at, ItemConcept.id)).all()
 
+@app.get("/api/items/{item_id}/enrichment", response_model=EnrichmentRead)
+def get_enrichment(item_id: int, db: Session = Depends(get_db)):
+    if db.get(CuriosityItem, item_id) is None:
+        raise HTTPException(404, "Item not found")
+    return enrichment_read(item_id, db)
+
+@app.post("/api/items/{item_id}/enrich", response_model=EnrichmentRead)
+def enrich_item(item_id: int, db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client), research: ResearchProvider = Depends(get_research_provider)):
+    item = db.get(CuriosityItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Item not found")
+    payload = {"kind": item.kind, "title": item.title, "note": item.note, "url": item.url}
+    try:
+        packet = research.research(payload)
+        source_payloads = [{"url": source.url, "title": source.title, "excerpt": source.excerpt[:2500]} for source in packet.sources]
+        analysis = ai.analyze_research(payload, packet.synthesis, source_payloads)
+    except (AIConfigurationError, AIProviderError) as exc:
+        raise ai_http_error(exc) from exc
+
+    if analysis.ambiguous_identity:
+        enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="needs_confirmation")
+        enrichment.status = "needs_confirmation"
+        enrichment.confirmation_question = analysis.confirmation_question or "Please add identifying details to the title or note, then refresh research."
+        enrichment.researched_at = datetime.now(timezone.utc)
+        db.add(enrichment)
+        db.commit()
+        return enrichment_read(item_id, db)
+
+    db.execute(delete(ConceptSource).where(ConceptSource.concept_id.in_(select(ItemConcept.id).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai"))))
+    db.execute(delete(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai"))
+    db.execute(delete(ResearchSource).where(ResearchSource.item_id == item_id))
+    unique_sources = {source.url: source for source in packet.sources if source.url}
+    saved_sources: dict[str, ResearchSource] = {}
+    for source in unique_sources.values():
+        saved = ResearchSource(item_id=item_id, url=source.url, title=source.title[:500], publisher=urlparse(source.url).netloc or None, excerpt=source.excerpt[:2500])
+        db.add(saved)
+        db.flush()
+        saved_sources[source.url] = saved
+    enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="researched")
+    enrichment.status = "needs_confirmation" if analysis.ambiguous_identity else "researched"
+    enrichment.resolved_title = analysis.resolved_title or None
+    enrichment.creator = analysis.creator or None
+    enrichment.release_info = analysis.release_info or None
+    enrichment.identity_summary = analysis.identity_summary or None
+    enrichment.confirmation_question = analysis.confirmation_question or None
+    enrichment.researched_at = datetime.now(timezone.utc)
+    db.add(enrichment)
+    if not analysis.ambiguous_identity:
+        seen_concepts: set[str] = set()
+        for extracted in analysis.concepts:
+            normalized_name = extracted.name.strip().casefold()
+            if normalized_name in seen_concepts:
+                continue
+            seen_concepts.add(normalized_name)
+            concept = ItemConcept(item_id=item_id, name=extracted.name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.explanation, level=extracted.level, relationship=extracted.relationship, evidence_status=extracted.evidence_status, confidence=extracted.confidence)
+            db.add(concept)
+            db.flush()
+            for url in dict.fromkeys(extracted.source_urls):
+                if url in saved_sources:
+                    db.add(ConceptSource(concept_id=concept.id, source_id=saved_sources[url].id))
+    db.commit()
+    return enrichment_read(item_id, db)
+
 @app.get("/api/sidequests", response_model=list[SidequestRead])
 def list_sidequests(db: Session = Depends(get_db)):
     saved = db.scalars(select(Sidequest).order_by(Sidequest.created_at.desc(), Sidequest.id.desc())).all()
@@ -253,20 +429,23 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
     for concept in concepts:
         by_item.setdefault(concept.item_id, []).append(concept)
     eligible = [item for item in items if by_item.get(item.id)]
-    pairs = [(a, b) for a, b in combinations(eligible, 2) if a.kind != b.kind]
+    pairs = list(combinations(eligible, 2))
     if not pairs:
-        raise HTTPException(422, "Add concepts to at least two curiosities from different types before asking for a Sidequest.")
+        raise HTTPException(422, "Add concepts to at least two curiosities before asking for a Sidequest.")
     pair_payloads = []
     allowed_pairs: set[frozenset[int]] = set()
     for item_a, item_b in pairs[:6]:
         allowed_pairs.add(frozenset((item_a.id, item_b.id)))
+        def concept_payload(concept: ItemConcept) -> dict[str, object]:
+            source_urls = list(db.scalars(select(ResearchSource.url).join(ConceptSource, ConceptSource.source_id == ResearchSource.id).where(ConceptSource.concept_id == concept.id)).all())
+            return {"name": concept.name, "level": concept.level or "legacy", "explanation": concept.explanation, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "sources": source_urls}
         pair_payloads.append({
-            "item_a": {"id": item_a.id, "kind": item_a.kind, "title": item_a.title, "note": item_a.note, "concepts": [c.name for c in by_item[item_a.id]]},
-            "item_b": {"id": item_b.id, "kind": item_b.kind, "title": item_b.title, "note": item_b.note, "concepts": [c.name for c in by_item[item_b.id]]},
+            "item_a": {"id": item_a.id, "kind": item_a.kind, "title": item_a.title, "note": item_a.note, "concepts": [concept_payload(c) for c in by_item[item_a.id]]},
+            "item_b": {"id": item_b.id, "kind": item_b.kind, "title": item_b.title, "note": item_b.note, "concepts": [concept_payload(c) for c in by_item[item_b.id]]},
         })
     try:
         generated = ai.generate_candidates(pair_payloads)
-        valid_candidates = [candidate for candidate in generated.candidates if frozenset((candidate.item_a_id, candidate.item_b_id)) in allowed_pairs]
+        valid_candidates = [candidate for candidate in generated.candidates if frozenset((candidate.item_a_id, candidate.item_b_id)) in allowed_pairs and deterministic_rejection_reason(candidate) is None]
         if not valid_candidates:
             raise AIProviderError("No grounded connection candidates were returned.")
         final = ai.critique_candidates([candidate.model_dump() for candidate in valid_candidates])
@@ -281,6 +460,7 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         connection=final.connection.strip(), bridge=final.bridge.strip(), why_interesting=final.why_interesting.strip(),
         where_it_breaks=final.where_it_breaks.strip(), new_question=final.new_question.strip(),
         evidence_status=final.evidence_status.strip(),
+        concepts_json=json.dumps(final.concepts_used), evidence_json=json.dumps(final.evidence),
     )
     db.add(sidequest)
     db.commit()

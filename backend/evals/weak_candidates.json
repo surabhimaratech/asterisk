@@ -1,0 +1,22 @@
+[
+  {
+    "item_a_id": 1,
+    "item_b_id": 2,
+    "title": "Two encounters with aliens",
+    "connection": "Both works explore extraterrestrial intelligence and aliens.",
+    "bridge": "A broad thematic similarity without a distinct causal mechanism",
+    "why_interesting": "They share a subject.",
+    "where_it_breaks": "Their contexts and claims differ substantially in ways the analogy does not explain.",
+    "new_question": "How else are they similar?"
+  },
+  {
+    "item_a_id": 1,
+    "item_b_id": 4,
+    "title": "Science in two formats",
+    "connection": "Both entries discuss science, but from different formats and perspectives.",
+    "bridge": "A broad thematic similarity without a distinct causal mechanism",
+    "why_interesting": "One is fiction and one is a podcast.",
+    "where_it_breaks": "Their contexts and claims differ substantially in ways the analogy does not explain.",
+    "new_question": "How does format affect science communication?"
+  }
+]

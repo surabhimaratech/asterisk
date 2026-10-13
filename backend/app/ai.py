@@ -12,6 +12,10 @@ from .prompts import (
     concept_input,
     connection_input,
     critique_input,
+    ENRICHMENT_SYSTEM_PROMPT,
+    RESEARCH_SYSTEM_PROMPT,
+    enrichment_input,
+    research_input,
 )
 
 
@@ -33,6 +37,28 @@ class ExtractedConcept(BaseModel):
 class ConceptExtraction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     concepts: list[ExtractedConcept] = Field(max_length=6)
+
+
+class EnrichedConcept(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    level: Literal["topic", "concept", "mechanism"]
+    explanation: str = Field(min_length=1, max_length=600)
+    relationship: str = Field(min_length=1, max_length=900)
+    evidence_status: Literal["supported", "inferred", "unverified"]
+    confidence: float = Field(ge=0, le=1)
+    source_urls: list[str] = Field(max_length=5)
+
+
+class EnrichmentAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ambiguous_identity: bool
+    confirmation_question: str = Field(max_length=500)
+    resolved_title: str = Field(max_length=300)
+    creator: str = Field(max_length=300)
+    release_info: str = Field(max_length=200)
+    identity_summary: str = Field(max_length=900)
+    concepts: list[EnrichedConcept] = Field(max_length=12)
 
 
 class ConnectionCandidate(BaseModel):
@@ -65,6 +91,8 @@ class CritiquedConnection(BaseModel):
     where_it_breaks: str
     new_question: str
     evidence_status: str
+    concepts_used: list[str] = Field(default_factory=list, max_length=8)
+    evidence: list[str] = Field(default_factory=list, max_length=8)
 
 
 class OpenRouterClient:
@@ -109,6 +137,49 @@ class OpenRouterClient:
         except (KeyError, StopIteration, ValueError, TypeError) as exc:
             raise AIProviderError("The AI provider returned an invalid structured response.") from exc
 
+    def research_item(self, item: dict[str, object]) -> tuple[str, list[dict[str, str]]]:
+        if not self.api_key:
+            raise AIConfigurationError("OPENROUTER_API_KEY is not configured. Add it to your local .env file and restart Asterisk.")
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": RESEARCH_SYSTEM_PROMPT},
+                {"role": "user", "content": research_input(item)},
+            ],
+            "tools": [{"type": "openrouter:web_search", "parameters": {
+                "engine": os.getenv("OPENROUTER_SEARCH_ENGINE", "exa"),
+                "max_results": 5, "max_total_results": 5, "max_characters": 2500,
+            }}],
+            "max_tokens": 1300,
+        }
+        try:
+            with httpx.Client(timeout=max(self.timeout, 45)) as client:
+                response = client.post(f"{self.base_url}/chat/completions", headers={
+                    "Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
+                }, json=payload)
+        except httpx.TimeoutException as exc:
+            raise AIProviderError("Research timed out. No research was saved; please try again.") from exc
+        except httpx.HTTPError as exc:
+            raise AIProviderError("Could not reach the research provider.") from exc
+        if response.status_code == 429:
+            raise AIProviderError("The research provider rate limit was reached. Please wait and try again.")
+        if response.status_code >= 400:
+            raise AIProviderError(f"The research provider returned an error ({response.status_code}).")
+        try:
+            message = response.json()["choices"][0]["message"]
+            citations: list[dict[str, str]] = []
+            for annotation in message.get("annotations", []):
+                citation = annotation.get("url_citation", {})
+                if citation.get("url"):
+                    citations.append({"url": citation["url"], "title": citation.get("title") or citation["url"], "excerpt": citation.get("content") or ""})
+            if not citations:
+                raise AIProviderError("Research returned no inspectable sources. Nothing was saved.")
+            return message["content"], citations
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, AIProviderError):
+                raise
+            raise AIProviderError("The research provider returned an invalid response.") from exc
+
     def extract_concepts(self, item: dict[str, object]) -> ConceptExtraction:
         return self._structured(CONCEPT_SYSTEM_PROMPT, concept_input(item), ConceptExtraction, "concept_extraction", 900)  # type: ignore[return-value]
 
@@ -117,6 +188,9 @@ class OpenRouterClient:
 
     def critique_candidates(self, candidates: list[dict[str, object]]) -> CritiquedConnection:
         return self._structured(CRITIQUE_SYSTEM_PROMPT, critique_input(candidates), CritiquedConnection, "sidequest_critique", 1400)  # type: ignore[return-value]
+
+    def analyze_research(self, item: dict[str, object], synthesis: str, sources: list[dict[str, str]]) -> EnrichmentAnalysis:
+        return self._structured(ENRICHMENT_SYSTEM_PROMPT, enrichment_input(item, synthesis, sources), EnrichmentAnalysis, "research_enrichment", 2200)  # type: ignore[return-value]
 
 
 def get_ai_client() -> OpenRouterClient:

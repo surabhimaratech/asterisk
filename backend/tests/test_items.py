@@ -6,8 +6,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.ai import CandidateBatch, ConceptExtraction, CritiquedConnection, ExtractedConcept, ConnectionCandidate, AIProviderError
+from app.ai import CandidateBatch, ConceptExtraction, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, ExtractedConcept, ConnectionCandidate, AIProviderError
 from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, app, get_ai_client, get_db
+from app.quality import deterministic_rejection_reason
+from app.research import ResearchPacket, RetrievedSource, get_research_provider
 
 
 @pytest.fixture
@@ -133,8 +135,8 @@ class FakeAI:
         b = pairs[0]["item_b"]["id"]  # type: ignore[index]
         return CandidateBatch(candidates=[ConnectionCandidate(
             item_a_id=a, item_b_id=b, title="Coordination without a conductor",
-            connection="Both entries explore how local choices can create organized collective behavior.",
-            bridge="Decentralized coordination", why_interesting="It reframes control as an emergent property.",
+            connection="Local agents acting on incomplete signals can produce organized collective behavior without global oversight.",
+            bridge="Decentralized coordination under incomplete information", why_interesting="It reframes control as an emergent property.",
             where_it_breaks="The biological system adapts through evolution while the engineered system follows designed rules.",
             new_question="When does local coordination become resilient rather than chaotic?",
         )])
@@ -144,6 +146,31 @@ class FakeAI:
         return CritiquedConnection(
             accepted=not self.reject, rejection_reason="Too superficial" if self.reject else "",
             **candidate, evidence_status="Exploratory and not externally verified.",
+        )
+
+    def analyze_research(self, _item: dict[str, object], _synthesis: str, sources: list[dict[str, str]]) -> EnrichmentAnalysis:
+        return EnrichmentAnalysis(
+            ambiguous_identity=False, confirmation_question="", resolved_title="The Dawn of Everything",
+            creator="David Graeber and David Wengrow", release_info="2021",
+            identity_summary="A work of history and anthropology.", concepts=[EnrichedConcept(
+                name="Institutional experimentation", level="concept", explanation="Societies vary political arrangements.",
+                relationship="The work surveys changes in social organization.", evidence_status="supported", confidence=0.84,
+                source_urls=[sources[0]["url"]],
+            )],
+        )
+
+
+class FakeResearch:
+    def research(self, _item: dict[str, object]) -> ResearchPacket:
+        source = RetrievedSource(url="https://example.com/publisher", title="Publisher description", excerpt="A sourced description.")
+        return ResearchPacket(synthesis="The publisher identifies the work and its scope.", sources=[source, source])
+
+
+class AmbiguousAI(FakeAI):
+    def analyze_research(self, _item: dict[str, object], _synthesis: str, _sources: list[dict[str, str]]) -> EnrichmentAnalysis:
+        return EnrichmentAnalysis(
+            ambiguous_identity=True, confirmation_question="Which edition or creator did you mean?",
+            resolved_title="", creator="", release_info="", identity_summary="", concepts=[],
         )
 
 
@@ -183,6 +210,43 @@ def test_extraction_missing_credentials(client: TestClient, monkeypatch: pytest.
     assert "OPENROUTER_API_KEY" in response.json()["detail"]
 
 
+def test_research_enrichment_persists_sources_and_preserves_manual_concepts(client: TestClient) -> None:
+    item_id = create_item(client).json()["id"]
+    manual = client.post(f"/api/items/{item_id}/concepts", json={"name": "My lens", "category": "personal"}).json()
+    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+
+    first = client.post(f"/api/items/{item_id}/enrich")
+    second = client.post(f"/api/items/{item_id}/enrich")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["status"] == "researched"
+    assert len(second.json()["sources"]) == 1
+    assert {concept["name"] for concept in second.json()["concepts"]} == {"My lens", "Institutional experimentation"}
+    enriched = next(concept for concept in second.json()["concepts"] if concept["origin"] == "ai")
+    assert enriched["level"] == "concept"
+    assert enriched["evidence_status"] == "supported"
+    assert enriched["source_ids"] == [second.json()["sources"][0]["id"]]
+    assert any(concept["id"] == manual["id"] for concept in second.json()["concepts"])
+
+
+def test_ambiguous_refresh_requests_confirmation_without_erasing_existing_research(client: TestClient) -> None:
+    item_id = create_item(client).json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    assert client.post(f"/api/items/{item_id}/enrich").status_code == 200
+
+    app.dependency_overrides[get_ai_client] = lambda: AmbiguousAI()
+    ambiguous = client.post(f"/api/items/{item_id}/enrich")
+
+    assert ambiguous.status_code == 200
+    assert ambiguous.json()["status"] == "needs_confirmation"
+    assert ambiguous.json()["confirmation_question"] == "Which edition or creator did you mean?"
+    assert len(ambiguous.json()["sources"]) == 1
+    assert any(concept["origin"] == "ai" for concept in ambiguous.json()["concepts"])
+
+
 def test_sidequest_generation_and_persistence(client: TestClient) -> None:
     book_id = create_item(client, title="Distributed systems").json()["id"]
     animal_id = create_item(client, kind="concept", title="Animal intelligence").json()["id"]
@@ -193,6 +257,19 @@ def test_sidequest_generation_and_persistence(client: TestClient) -> None:
     assert created.status_code == 201
     assert created.json()["evidence_status"] == "Exploratory and not externally verified."
     assert client.get("/api/sidequests").json() == [created.json()]
+
+
+def test_sidequest_allows_two_items_of_the_same_type(client: TestClient) -> None:
+    first = create_item(client, title="Distributed systems").json()["id"]
+    second = create_item(client, title="The Overstory").json()["id"]
+    for item_id, name in [(first, "Fault tolerance"), (second, "Ecological resilience")]:
+        client.post(f"/api/items/{item_id}/concepts", json={"name": name, "category": "mechanism"})
+
+    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    created = client.post("/api/sidequests/surprise")
+
+    assert created.status_code == 201
+    assert {created.json()["item_a_id"], created.json()["item_b_id"]} == {first, second}
 
 
 def test_sidequest_insufficient_data_and_rejected_candidate(client: TestClient) -> None:
@@ -228,3 +305,18 @@ def test_llm_response_models_reject_extra_fields_and_excess_concepts() -> None:
     ]
     with pytest.raises(ValueError):
         ConceptExtraction.model_validate({"concepts": concepts})
+
+
+@pytest.mark.parametrize("connection", [
+    "Both works explore extraterrestrial intelligence and aliens.",
+    "Both entries discuss science, but from different formats and perspectives.",
+])
+def test_quality_gate_rejects_obvious_comparisons(connection: str) -> None:
+    candidate = ConnectionCandidate(
+        item_a_id=1, item_b_id=2, title="A familiar comparison", connection=connection,
+        bridge="A broad thematic similarity without a distinct causal mechanism",
+        why_interesting="They appear related.",
+        where_it_breaks="Their contexts and claims differ substantially in ways the analogy does not explain.",
+        new_question="What else is similar?",
+    )
+    assert deterministic_rejection_reason(candidate) is not None

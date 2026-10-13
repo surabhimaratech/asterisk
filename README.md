@@ -54,6 +54,8 @@ If an earlier installation has `backend/curiosity.db`, Asterisk copies it to the
 - `GET /api/items/{id}/concepts` — list concepts
 - `POST /api/items/{id}/concepts` — add a user-authored concept
 - `POST /api/items/{id}/concepts/extract` — explicitly request AI extraction
+- `GET /api/items/{id}/enrichment` — inspect research identity, sources, and evidence-linked concepts
+- `POST /api/items/{id}/enrich` — explicitly research and enrich one item
 - `DELETE /api/concepts/{id}` — remove a concept
 - `GET /api/sidequests` — revisit saved Sidequests
 - `POST /api/sidequests/surprise` — generate and save one Sidequest
@@ -72,11 +74,15 @@ cp .env.example .env
 
 `scripts/dev.sh` loads the root `.env` automatically. The file is ignored by Git; never paste the key into `.env.example`, frontend code, or another tracked file.
 
-`OPENROUTER_API_KEY` is required. `OPENROUTER_MODEL` defaults to `openai/gpt-4o-mini`, and `OPENROUTER_TIMEOUT_SECONDS` defaults to `30`. Choose a model whose OpenRouter page lists structured-output support.
+`OPENROUTER_API_KEY` is required. `OPENROUTER_MODEL` defaults to `openai/gpt-4o-mini`, `OPENROUTER_TIMEOUT_SECONDS` defaults to `30`, and `OPENROUTER_SEARCH_ENGINE` defaults to `exa`. Choose a model whose OpenRouter page lists structured-output and tool-use support.
 
-Concept extraction is always user-triggered. Re-extraction replaces earlier AI suggestions but preserves manually added concepts. Asterisk sends the selected item's type, title, note, and URL string to the configured provider; it does not retrieve the URL or claim to have read its content.
+**Enrich with Research** is explicitly user-triggered and billable. It uses OpenRouter's web-search server tool, capped at five results with bounded excerpts, followed by a structured analysis call. Search-tool charges and ordinary model token charges apply. If retrieval produces no inspectable sources, Asterisk saves no fabricated research. Research permits full spoilers for items already in your library.
 
-Sidequests require concepts attached to at least two library items of different types. In the Sidequests section, choose a curiosity and use **Add concepts** to generate suggestions or write your own; repeat this for a different item type to unlock **Surprise Me**. A “concept” here is a theme attached to any curiosity, not only an item saved with the Concept type. The experimental pipeline selects candidate pairs, generates possible connections, critiques them, rejects weak results, and persists the strongest accepted result. Every saved Sidequest is labeled exploratory and externally unverified.
+Concept extraction is always user-triggered. Quick extraction uses only the saved entry and is labeled accordingly. Research enrichment retrieves real source excerpts, preserves their URLs and retrieval metadata, then extracts topics, substantive concepts, and mechanisms with supported/inferred/unverified labels. Re-enrichment replaces prior AI research while preserving manually added concepts and original notes. Ambiguous identities are marked for confirmation rather than researched arbitrarily.
+
+Sidequests require concepts attached to at least two library items. In the Sidequests section, choose a curiosity and use **Add concepts** to generate suggestions or write your own; repeat this for any second item to unlock **Surprise Me**. The two items may have the same type—the critic still rejects connections that are too obvious or superficial. A “concept” here is a theme attached to any curiosity, not only an item saved with the Concept type. The experimental pipeline selects candidate pairs, generates possible connections, critiques them, rejects weak results, and persists the strongest accepted result. Every saved Sidequest is labeled exploratory and externally unverified.
+
+Schema changes are additive at startup for the local SQLite database: research tables are created and new nullable/defaulted columns are added without deleting existing data.
 
 ## Tests
 
@@ -86,6 +92,14 @@ backend/.venv/bin/pytest
 cd frontend
 npm run build
 ```
+
+Run the deterministic quality gate against the included weak examples:
+
+```bash
+backend/.venv/bin/python backend/evals/quality_eval.py backend/evals/weak_candidates.json
+```
+
+Candidates that pass this gate still require human review for surprise, conceptual depth, grounding, specificity, and curiosity potential; the gate is not a calibrated quality score.
 
 ## Roadmap
 1. **Milestone 1**: capture, list, search, filter, edit, and delete
