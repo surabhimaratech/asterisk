@@ -91,8 +91,8 @@ class CritiquedConnection(BaseModel):
     where_it_breaks: str
     new_question: str
     evidence_status: str
-    concepts_used: list[str] = Field(default_factory=list, max_length=8)
-    evidence: list[str] = Field(default_factory=list, max_length=8)
+    concepts_used: list[str] = Field(max_length=8)
+    evidence: list[str] = Field(max_length=8)
 
 
 class OpenRouterClient:

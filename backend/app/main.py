@@ -212,6 +212,9 @@ class EnrichmentRead(BaseModel):
     sources: list[ResearchSourceRead]
     concepts: list[ConceptRead]
 
+class EnrichmentRequest(BaseModel):
+    identity_hint: str | None = Field(default=None, max_length=500)
+
 def normalize_url(value: str | None) -> str | None:
     if value is None or not value.strip():
         return None
@@ -360,11 +363,11 @@ def get_enrichment(item_id: int, db: Session = Depends(get_db)):
     return enrichment_read(item_id, db)
 
 @app.post("/api/items/{item_id}/enrich", response_model=EnrichmentRead)
-def enrich_item(item_id: int, db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client), research: ResearchProvider = Depends(get_research_provider)):
+def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client), research: ResearchProvider = Depends(get_research_provider)):
     item = db.get(CuriosityItem, item_id)
     if item is None:
         raise HTTPException(404, "Item not found")
-    payload = {"kind": item.kind, "title": item.title, "note": item.note, "url": item.url}
+    payload = {"kind": item.kind, "title": item.title, "note": item.note, "url": item.url, "identity_hint": data.identity_hint if data else None}
     try:
         packet = research.research(payload)
         source_payloads = [{"url": source.url, "title": source.title, "excerpt": source.excerpt[:2500]} for source in packet.sources]
@@ -372,7 +375,10 @@ def enrich_item(item_id: int, db: Session = Depends(get_db), ai: OpenRouterClien
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc
 
-    if analysis.ambiguous_identity:
+    identity_confirmed = bool(data and data.identity_hint and data.identity_hint.strip())
+    if analysis.ambiguous_identity and identity_confirmed:
+        raise HTTPException(502, "The analysis did not honor the confirmed identity. Existing research was preserved; please retry.")
+    if analysis.ambiguous_identity and not identity_confirmed:
         enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="needs_confirmation")
         enrichment.status = "needs_confirmation"
         enrichment.confirmation_question = analysis.confirmation_question or "Please add identifying details to the title or note, then refresh research."
@@ -392,7 +398,7 @@ def enrich_item(item_id: int, db: Session = Depends(get_db), ai: OpenRouterClien
         db.flush()
         saved_sources[source.url] = saved
     enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="researched")
-    enrichment.status = "needs_confirmation" if analysis.ambiguous_identity else "researched"
+    enrichment.status = "researched"
     enrichment.resolved_title = analysis.resolved_title or None
     enrichment.creator = analysis.creator or None
     enrichment.release_info = analysis.release_info or None
@@ -428,7 +434,8 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
     by_item: dict[int, list[ItemConcept]] = {}
     for concept in concepts:
         by_item.setdefault(concept.item_id, []).append(concept)
-    eligible = [item for item in items if by_item.get(item.id)]
+    researched_ids = set(db.scalars(select(ItemEnrichment.item_id).where(ItemEnrichment.status == "researched")).all())
+    eligible = [item for item in items if by_item.get(item.id) and (not researched_ids or item.id in researched_ids)]
     pairs = list(combinations(eligible, 2))
     if not pairs:
         raise HTTPException(422, "Add concepts to at least two curiosities before asking for a Sidequest.")
@@ -445,9 +452,14 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         })
     try:
         generated = ai.generate_candidates(pair_payloads)
-        valid_candidates = [candidate for candidate in generated.candidates if frozenset((candidate.item_a_id, candidate.item_b_id)) in allowed_pairs and deterministic_rejection_reason(candidate) is None]
-        if not valid_candidates:
+        grounded_candidates = [candidate for candidate in generated.candidates if frozenset((candidate.item_a_id, candidate.item_b_id)) in allowed_pairs]
+        if not grounded_candidates:
             raise AIProviderError("No grounded connection candidates were returned.")
+        rejected_reasons = [reason for candidate in grounded_candidates if (reason := deterministic_rejection_reason(candidate))]
+        valid_candidates = [candidate for candidate in grounded_candidates if deterministic_rejection_reason(candidate) is None]
+        if not valid_candidates:
+            summary = "; ".join(dict.fromkeys(rejected_reasons))
+            raise HTTPException(422, f"No compelling connection found. {summary} Try enriching more varied curiosities or adding more specific concepts.")
         final = ai.critique_candidates([candidate.model_dump() for candidate in valid_candidates])
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc

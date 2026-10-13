@@ -145,7 +145,7 @@ class FakeAI:
         candidate = candidates[0]
         return CritiquedConnection(
             accepted=not self.reject, rejection_reason="Too superficial" if self.reject else "",
-            **candidate, evidence_status="Exploratory and not externally verified.",
+            **candidate, evidence_status="Exploratory and not externally verified.", concepts_used=["Decentralized coordination"], evidence=[],
         )
 
     def analyze_research(self, _item: dict[str, object], _synthesis: str, sources: list[dict[str, str]]) -> EnrichmentAnalysis:
@@ -320,3 +320,29 @@ def test_quality_gate_rejects_obvious_comparisons(connection: str) -> None:
         new_question="What else is similar?",
     )
     assert deterministic_rejection_reason(candidate) is not None
+
+
+def test_sidequest_reports_when_all_generated_candidates_are_shallow(client: TestClient) -> None:
+    first = create_item(client, title="First contact novel").json()["id"]
+    second = create_item(client, title="Another science story").json()["id"]
+    for item_id in (first, second):
+        client.post(f"/api/items/{item_id}/concepts", json={"name": "Aliens", "category": "general"})
+
+    class ShallowAI(FakeAI):
+        def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
+            a = pairs[0]["item_a"]["id"]  # type: ignore[index]
+            b = pairs[0]["item_b"]["id"]  # type: ignore[index]
+            return CandidateBatch(candidates=[ConnectionCandidate(
+                item_a_id=a, item_b_id=b, title="Aliens in two stories",
+                connection="Both works explore extraterrestrial intelligence and aliens.",
+                bridge="A broad thematic similarity without a distinct causal mechanism",
+                why_interesting="They share a topic.",
+                where_it_breaks="Their contexts and claims differ substantially in ways the analogy does not explain.",
+                new_question="What else is similar?",
+            )])
+
+    app.dependency_overrides[get_ai_client] = lambda: ShallowAI()
+    response = client.post("/api/sidequests/surprise")
+    assert response.status_code == 422
+    assert "No compelling connection found" in response.json()["detail"]
+    assert "broad shared topic" in response.json()["detail"]

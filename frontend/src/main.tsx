@@ -501,6 +501,7 @@ function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onC
   const [category, setCategory] = useState<ItemConcept['category']>('personal')
   const [enrichment, setEnrichment] = useState<Enrichment | null>(null)
   const [enriching, setEnriching] = useState(false)
+  const [identityHint, setIdentityHint] = useState('')
 
   async function load() {
     setLoading(true)
@@ -531,11 +532,12 @@ function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onC
     finally { setExtracting(false) }
   }
 
-  async function enrich() {
+  async function enrich(identityHintOverride = '') {
     setEnriching(true)
     onError('')
     try {
-      const response = await fetch(`/api/items/${item.id}/enrich`, { method: 'POST' })
+      const hint = identityHintOverride.trim()
+      const response = await fetch(`/api/items/${item.id}/enrich`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identity_hint: hint || null }) })
       if (!response.ok) throw new Error(await responseError(response, 'Research could not be completed'))
       const researched: Enrichment = await response.json()
       setEnrichment(researched)
@@ -567,7 +569,7 @@ function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onC
     <button className="detail-close" type="button" aria-label="Close concept explorer" onClick={onClose}>×</button>
     <div className="concept-intro"><span>✦ RESEARCH & CONCEPTS</span><h2>{item.title}</h2><p>Research uses real web sources to identify this curiosity and find substantive ideas. Sources and AI interpretations stay separate from your original note. Full spoilers are allowed.</p></div>
     <div className="concept-actions"><button className="primary" type="button" disabled={enriching} onClick={() => void enrich()}>{enriching ? 'Researching the trail…' : enrichment?.status === 'researched' ? '↻ Refresh Research' : '✦ Enrich with Research'}</button><button className="secondary" type="button" disabled={extracting} onClick={() => void extract()}>{extracting ? 'Extracting…' : 'Quick extract without research'}</button></div>
-    {enrichment && enrichment.status !== 'not_researched' && <section className={`research-card ${enrichment.status}`}><div className="research-status"><span>{enrichment.status === 'needs_confirmation' ? 'IDENTITY NEEDS CONFIRMATION' : 'RESEARCHED'}</span>{enrichment.researched_at && <time>{new Date(enrichment.researched_at).toLocaleString()}</time>}</div>{enrichment.status === 'needs_confirmation' ? <p className="confirmation-question">{enrichment.confirmation_question}</p> : <><h3>{enrichment.resolved_title}</h3><p>{[enrichment.creator, enrichment.release_info].filter(Boolean).join(' · ')}</p><p>{enrichment.identity_summary}</p></>}<details><summary>{enrichment.sources.length} research {enrichment.sources.length === 1 ? 'source' : 'sources'}</summary><div className="research-sources">{enrichment.sources.map(source => <article key={source.id}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a><small>{source.publisher} · {source.retrieval_status}</small><p>{source.excerpt}</p></article>)}</div></details></section>}
+    {enrichment && enrichment.status !== 'not_researched' && <section className={`research-card ${enrichment.status}`}><div className="research-status"><span>{enrichment.status === 'needs_confirmation' ? 'IDENTITY NEEDS CONFIRMATION' : 'RESEARCHED'}</span>{enrichment.researched_at && <time>{new Date(enrichment.researched_at).toLocaleString()}</time>}</div>{enrichment.status === 'needs_confirmation' ? <><p className="confirmation-question">{enrichment.confirmation_question}</p><div className="identity-confirm"><input aria-label="Identity details" placeholder="Author, director, year, or episode title" value={identityHint} onChange={event => setIdentityHint(event.target.value)} /><button type="button" disabled={!identityHint.trim() || enriching} onClick={() => void enrich(identityHint)}>Confirm & research</button></div></> : <><h3>{enrichment.resolved_title}</h3><p>{[enrichment.creator, enrichment.release_info].filter(Boolean).join(' · ')}</p><p>{enrichment.identity_summary}</p></>}<details><summary>{enrichment.sources.length} research {enrichment.sources.length === 1 ? 'source' : 'sources'}</summary><div className="research-sources">{enrichment.sources.map(source => <article key={source.id}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a><small>{source.publisher} · {source.retrieval_status}</small><p>{source.excerpt}</p></article>)}</div></details></section>}
     {loading ? <p className="muted">Opening the concept drawer…</p> : concepts.length === 0 ? <div className="concept-empty">No concepts yet. Ask Asterisk to explore, or add one in your own words.</div> : <div className="concept-list">{concepts.map(concept => <article className={`concept-chip ${concept.origin}`} key={concept.id}>
       <div><span>{concept.origin === 'ai' ? 'AI-INFERRED' : 'YOUR CONCEPT'} · {concept.level || concept.category}{concept.evidence_status ? ` · ${concept.evidence_status}` : ''}</span><strong>{concept.name}</strong>{concept.explanation && <p>{concept.explanation}</p>}{concept.relationship && <p className="concept-relationship">In this item: {concept.relationship}</p>}</div>
       <button type="button" aria-label={`Remove ${concept.name}`} onClick={() => void remove(concept)}>×</button>
