@@ -614,6 +614,83 @@ def test_research_stops_when_sources_do_not_match_confirmed_identity(client: Tes
     assert client.get(f"/api/items/{item_id}/concepts").json() == []
 
 
+@pytest.mark.parametrize(
+    ("title", "label", "definition", "mechanism", "source_excerpt", "relationship"),
+    [
+        (
+            "Eragon / Inheritance Cycle",
+            "Language as Power",
+            "A grounded interpretation of language as an instrument that constrains what actors can cause or command.",
+            "Shared rules give utterances force: speakers must know the relevant forms, while meaning and consequences depend on how those forms are used.",
+            "In many traditions, words do more than describe events: socially recognized utterances can authorize actions, impose obligations, and change what participants may do.",
+            "The work portrays learned words as rule-bound instruments whose use can directly alter events while imposing costs and constraints on speakers.",
+        ),
+        (
+            "Cytonic",
+            "Identity Fragmentation",
+            "A grounded interpretation of identity becoming divided across roles, memories, or incompatible frames of experience.",
+            "When memories and roles cannot be integrated into one continuous self-model, people may experience competing perspectives as discontinuous parts of identity.",
+            "Psychological accounts describe identity disturbance through discontinuity in a person's sense of self, agency, memory, and the integration of roles across contexts.",
+            "The work depicts a character navigating discontinuous memories and roles that complicate a stable, integrated understanding of self.",
+        ),
+    ],
+)
+def test_grounded_interpretations_are_accepted_without_academic_label_match(
+    client: TestClient,
+    title: str,
+    label: str,
+    definition: str,
+    mechanism: str,
+    source_excerpt: str,
+    relationship: str,
+) -> None:
+    class InterpretationResearch(FakeResearch):
+        def research_problems(self, _item: dict[str, object], _problems: list[dict[str, object]]) -> ResearchPacket:
+            source = RetrievedSource(url="https://example.edu/grounded-interpretation", title="Independent mechanism reference", excerpt=source_excerpt)
+            return ResearchPacket(synthesis="Independent research supports the underlying mechanism without naming the literary interpretation.", sources=[source])
+
+    class InterpretationAI(FakeAI):
+        def extract_evidence_concepts(self, problems: ResearchProblemBatch, _concept_synthesis: str, concept_sources: list[dict[str, str]]) -> EvidenceConceptBatch:
+            return EvidenceConceptBatch(candidates=[EvidenceConceptCandidate(
+                candidate_id="grounded-interpretation", problem_ids=[problems.problems[0].problem_id],
+                discovery_origin="work_grounded", discovery_source_ids=[concept_sources[0]["source_id"]],
+                research_path="Research into the work's concrete problem led to an independent account of the underlying mechanism and a cautious descriptive interpretation.",
+                label_kind="descriptive_label", concept_classification="grounded_interpretation",
+                canonical_name=label, aliases=[], definition=definition, domain="interpretive psychology",
+                mechanism=mechanism,
+                concept_evidence=[EvidenceReference(source_id=concept_sources[0]["source_id"], excerpt=source_excerpt, evidence_form="paraphrase")],
+                curiosity_hook=None, uncertainty="This descriptive label is an interpretation, not established academic terminology.",
+            )], insufficient_evidence_reasons=[])
+
+        def validate_concepts(self, _understanding: WorkUnderstanding, _problems: ResearchProblemBatch, candidates: EvidenceConceptBatch, work_sources: list[dict[str, str]], _concept_sources: list[dict[str, str]]) -> ConceptValidationBatch:
+            candidate = candidates.candidates[0]
+            return ConceptValidationBatch(results=[ValidatedConcept(
+                candidate_id=candidate.candidate_id, accepted=True, rejection_reason="",
+                discovery_origin=candidate.discovery_origin, discovery_source_ids=candidate.discovery_source_ids,
+                research_path=candidate.research_path, label_kind=candidate.label_kind,
+                concept_classification="grounded_interpretation", canonical_name=candidate.canonical_name,
+                aliases=[], level="mechanism", definition=candidate.definition,
+                concept_evidence=candidate.concept_evidence, domain=candidate.domain, mechanism=candidate.mechanism,
+                relationship_type="interpretive", relationship_evidence=relationship,
+                concept_verification="partially_verified", relationship_verification="supported_interpretation",
+                confidence=0.78, mechanism_defensibility="defensible",
+                relationship_source_ids=[work_sources[0]["source_id"]], curiosity_hook=None,
+            )])
+
+    item_id = create_item(client, kind="book", title=title).json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: InterpretationResearch()
+    app.dependency_overrides[get_ai_client] = lambda: InterpretationAI()
+
+    response = client.post(f"/api/items/{item_id}/enrich")
+
+    assert response.status_code == 200
+    concept = response.json()["concepts"][0]
+    assert concept["name"] == label
+    assert concept["concept_classification"] == "grounded_interpretation"
+    assert concept["relationship_verification"] == "supported_interpretation"
+    assert concept["canonical_concept_id"] is None
+
+
 def test_ambiguous_identity_requires_choice_and_confirmation_persists(client: TestClient) -> None:
     item_id = create_item(client, kind="book", title="The Echo").json()["id"]
     app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
@@ -654,6 +731,20 @@ def test_identity_change_retires_ai_findings_but_preserves_user_content(client: 
     assert all(finding["superseded_at"] for finding in enrichment["rejected_leads"])
 
 
+def test_identity_reset_retires_user_kept_findings_from_current_discovery(client: TestClient) -> None:
+    item_id, finding_id = rejected_finding(client)
+    kept = client.patch(f"/api/rejected-findings/{finding_id}/review", json={"decision": "keep"}).json()
+    manual_id = client.post(f"/api/items/{item_id}/concepts", json={"name": "My durable lens", "category": "personal"}).json()["id"]
+    assert kept["kept_concept_id"] is not None
+
+    reset = client.delete(f"/api/items/{item_id}/identity")
+
+    assert reset.status_code == 200
+    assert [concept["id"] for concept in client.get(f"/api/items/{item_id}/concepts").json()] == [manual_id]
+    historical = client.get("/api/rejected-findings", params={"item_id": item_id}).json()
+    assert all(finding["superseded_at"] for finding in historical)
+
+
 def test_movie_and_tv_series_are_distinct_api_types(client: TestClient) -> None:
     movie = create_item(client, kind="movie", title="Normal People: The Film").json()
     series = create_item(client, kind="tv_series", title="Normal People").json()
@@ -686,6 +777,15 @@ def test_additive_migration_preserves_ids_and_only_recategorizes_known_tv_titles
     assert rows == [(1, "tv_series", "Castle"), (2, "movie", "An Ambiguous Title"), (3, "tv_series", "Game of Thrones")]
     assert preserved == (1, 1, 1, "needs_confirmation")
 
+    with migration_engine.begin() as connection:
+        connection.exec_driver_sql("INSERT INTO curiosity_items (id, kind, title) VALUES (4, 'movie', 'Castle')")
+    migrate_additive_columns(migration_engine, f"sqlite:///{database}")
+    with migration_engine.begin() as connection:
+        future_entry = connection.exec_driver_sql("SELECT kind FROM curiosity_items WHERE id = 4").scalar_one()
+        migration_count = connection.exec_driver_sql("SELECT count(*) FROM schema_migrations WHERE version = '2026-10-13-known-tv-series'").scalar_one()
+    assert future_entry == "movie"
+    assert migration_count == 1
+
 
 def test_cited_paraphrase_passes_without_exact_phrase_but_fake_quote_fails() -> None:
     text = {"concept-1": "Researchers describe how observers update possible explanations from incomplete evidence while preserving uncertainty about hidden causes."}
@@ -715,6 +815,46 @@ def test_interest_is_independent_from_review_and_evidence_status(client: TestCli
     assert finding["interested"] is False
 
 
+def test_interest_persists_across_research_reruns(client: TestClient) -> None:
+    item_id = create_item(client).json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    first = client.post(f"/api/items/{item_id}/enrich").json()
+    first_concept = first["concepts"][0]
+    marked = client.patch(f"/api/concepts/{first_concept['id']}/interest", json={"interested": True, "note": "Keep following this mechanism."})
+    assert marked.status_code == 200
+
+    rerun = client.post(f"/api/items/{item_id}/enrich")
+
+    assert rerun.status_code == 200
+    current = rerun.json()["concepts"]
+    assert len(current) == 1
+    assert current[0]["id"] != first_concept["id"]
+    assert current[0]["interested"] is True
+    assert current[0]["interest_note"] == "Keep following this mechanism."
+
+    cleared = client.patch(f"/api/concepts/{current[0]['id']}/interest", json={"interested": False})
+    assert cleared.status_code == 200
+    rerun_after_reversal = client.post(f"/api/items/{item_id}/enrich")
+    assert rerun_after_reversal.status_code == 200
+    assert rerun_after_reversal.json()["concepts"][0]["interested"] is False
+
+
+def test_interest_persists_across_quick_extraction_reruns(client: TestClient) -> None:
+    item_id = create_item(client).json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    first = client.post(f"/api/items/{item_id}/concepts/extract").json()[0]
+    client.patch(f"/api/concepts/{first['id']}/interest", json={"interested": True, "note": "Worth revisiting."})
+
+    rerun = client.post(f"/api/items/{item_id}/concepts/extract")
+
+    assert rerun.status_code == 200
+    current = rerun.json()[0]
+    assert current["id"] != first["id"]
+    assert current["interested"] is True
+    assert current["interest_note"] == "Worth revisiting."
+
+
 def test_interest_prioritizes_sidequest_pairs_without_changing_verification(client: TestClient) -> None:
     first = create_item(client, title="First").json()["id"]
     second = create_item(client, title="Second").json()["id"]
@@ -737,6 +877,27 @@ def test_interest_prioritizes_sidequest_pairs_without_changing_verification(clie
     assert set(ai.first_pair or ()) == {first, second}
     concepts = client.get(f"/api/items/{first}/concepts").json()
     assert concepts[0]["concept_verification"] is None
+
+
+def test_sidequest_rejects_repeated_bridge_and_forces_exploratory_status(client: TestClient) -> None:
+    first = create_item(client, title="First").json()["id"]
+    second = create_item(client, title="Second").json()["id"]
+    for item_id, name in [(first, "Distributed coordination"), (second, "Collective sensing")]:
+        client.post(f"/api/items/{item_id}/concepts", json={"name": name, "category": "mechanism"})
+
+    class OverclaimingAI(FakeAI):
+        def critique_candidates(self, candidates: list[dict[str, object]]) -> CritiquedConnection:
+            result = super().critique_candidates(candidates)
+            return result.model_copy(update={"evidence_status": "Verified scientific relationship."})
+
+    app.dependency_overrides[get_ai_client] = lambda: OverclaimingAI()
+    created = client.post("/api/sidequests/surprise")
+    repeated = client.post("/api/sidequests/surprise")
+
+    assert created.status_code == 201
+    assert created.json()["evidence_status"] == "Exploratory and not externally verified."
+    assert repeated.status_code == 422
+    assert "already been explored" in repeated.json()["detail"]
 
 
 @pytest.mark.parametrize("connection", [

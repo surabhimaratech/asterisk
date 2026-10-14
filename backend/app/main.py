@@ -417,22 +417,34 @@ def migrate_additive_columns(target_engine=engine, database_url: str = DATABASE_
         "research_sources": {"superseded_at": "DATETIME"},
     }
     with target_engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE IF NOT EXISTS schema_migrations "
+            "(version VARCHAR(120) PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
         schema = inspect(connection)
         for table, columns in additions.items():
             existing = {column["name"] for column in schema.get_columns(table)}
             for name, definition in columns.items():
                 if name not in existing:
                     connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
-        # Known, explicit corrections only. Ambiguous movie records are left untouched.
-        connection.exec_driver_sql(
-            "UPDATE curiosity_items SET kind = 'tv_series' "
-            "WHERE kind = 'movie' AND lower(trim(title)) IN ('castle', 'game of thrones', 'normal people')"
-        )
-        known_tv = "SELECT id FROM curiosity_items WHERE kind = 'tv_series' AND lower(trim(title)) IN ('castle', 'game of thrones', 'normal people')"
-        connection.exec_driver_sql(f"UPDATE item_concepts SET superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP) WHERE origin = 'ai' AND item_id IN ({known_tv}) AND item_id IN (SELECT item_id FROM item_enrichments WHERE identity_status != 'confirmed')")
-        connection.exec_driver_sql(f"UPDATE research_sources SET superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP) WHERE item_id IN ({known_tv}) AND item_id IN (SELECT item_id FROM item_enrichments WHERE identity_status != 'confirmed')")
-        connection.exec_driver_sql(f"UPDATE concept_lead_audits SET superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP) WHERE item_id IN ({known_tv}) AND item_id IN (SELECT item_id FROM item_enrichments WHERE identity_status != 'confirmed')")
-        connection.exec_driver_sql(f"UPDATE item_enrichments SET status = 'needs_confirmation' WHERE item_id IN ({known_tv}) AND identity_status != 'confirmed'")
+        migration_version = "2026-10-13-known-tv-series"
+        already_applied = connection.exec_driver_sql(
+            "SELECT 1 FROM schema_migrations WHERE version = ?", (migration_version,)
+        ).fetchone()
+        if already_applied is None:
+            # One-time correction for the three legacy records known to have been
+            # entered before TV Series was a distinct type. Future same-titled
+            # movie entries must remain exactly as the user categorized them.
+            connection.exec_driver_sql(
+                "UPDATE curiosity_items SET kind = 'tv_series' "
+                "WHERE kind = 'movie' AND lower(trim(title)) IN ('castle', 'game of thrones', 'normal people')"
+            )
+            known_tv = "SELECT id FROM curiosity_items WHERE kind = 'tv_series' AND lower(trim(title)) IN ('castle', 'game of thrones', 'normal people')"
+            connection.exec_driver_sql(f"UPDATE item_concepts SET superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP) WHERE origin IN ('ai', 'user_kept') AND item_id IN ({known_tv}) AND item_id IN (SELECT item_id FROM item_enrichments WHERE identity_status != 'confirmed')")
+            connection.exec_driver_sql(f"UPDATE research_sources SET superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP) WHERE item_id IN ({known_tv}) AND item_id IN (SELECT item_id FROM item_enrichments WHERE identity_status != 'confirmed')")
+            connection.exec_driver_sql(f"UPDATE concept_lead_audits SET superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP) WHERE item_id IN ({known_tv}) AND item_id IN (SELECT item_id FROM item_enrichments WHERE identity_status != 'confirmed')")
+            connection.exec_driver_sql(f"UPDATE item_enrichments SET status = 'needs_confirmation' WHERE item_id IN ({known_tv}) AND identity_status != 'confirmed'")
+            connection.exec_driver_sql("INSERT INTO schema_migrations (version) VALUES (?)", (migration_version,))
 
 migrate_additive_columns()
 app = FastAPI(title="Asterisk", description="There's more to the story.", version="0.2.0")
@@ -584,12 +596,37 @@ def save_identity_resolution(item: CuriosityItem, resolution, sources: list[dict
 
 def retire_stale_identity_research(item_id: int, db: Session) -> None:
     now = datetime.now(timezone.utc)
-    for concept in db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai", ItemConcept.superseded_at.is_(None))).all():
+    for concept in db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin.in_(("ai", "user_kept")), ItemConcept.superseded_at.is_(None))).all():
         concept.superseded_at = now
     for source in db.scalars(select(ResearchSource).where(ResearchSource.item_id == item_id, ResearchSource.superseded_at.is_(None))).all():
         source.superseded_at = now
     for audit in db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id, ConceptLeadAudit.superseded_at.is_(None))).all():
         audit.superseded_at = now
+
+
+def interest_state_for_name(item_id: int, name: str, db: Session) -> tuple[bool, str | None, datetime | None]:
+    """Carry an explicit interest signal across regenerated rows with the same concept label."""
+    normalized = normalize_concept_term(name)
+    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id)).all()
+    audits = db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id)).all()
+    matches = [entry for entry in [*concepts, *audits] if normalize_concept_term(entry.name) == normalized]
+    interested = [entry for entry in matches if entry.interested]
+    if not interested:
+        return False, None, None
+    latest = max(interested, key=lambda entry: entry.interested_at or entry.created_at)
+    return True, latest.interest_note, latest.interested_at
+
+
+def synchronize_interest(item_id: int, name: str, interested: bool, note: str | None, at: datetime | None, db: Session) -> None:
+    """Keep historical and current representations from reviving a reversed signal."""
+    normalized = normalize_concept_term(name)
+    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id)).all()
+    audits = db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id)).all()
+    for entry in [*concepts, *audits]:
+        if normalize_concept_term(entry.name) == normalized:
+            entry.interested = interested
+            entry.interest_note = note if interested else None
+            entry.interested_at = at if interested else None
 
 
 def evidence_recovery_limit() -> int:
@@ -749,15 +786,8 @@ def update_concept_interest(concept_id: int, data: InterestUpdate, db: Session =
     concept = db.get(ItemConcept, concept_id)
     if concept is None:
         raise HTTPException(404, "Concept not found")
-    concept.interested = data.interested
-    concept.interest_note = data.note if data.interested else None
-    concept.interested_at = datetime.now(timezone.utc) if data.interested else None
-    if concept.review_audit_id is not None:
-        lead = db.get(ConceptLeadAudit, concept.review_audit_id)
-        if lead is not None:
-            lead.interested = data.interested
-            lead.interest_note = concept.interest_note
-            lead.interested_at = concept.interested_at
+    at = datetime.now(timezone.utc) if data.interested else None
+    synchronize_interest(concept.item_id, concept.name, data.interested, data.note, at, db)
     db.commit()
     db.refresh(concept)
     return concept_read(concept, db)
@@ -768,15 +798,8 @@ def update_finding_interest(finding_id: int, data: InterestUpdate, db: Session =
     lead = db.get(ConceptLeadAudit, finding_id)
     if lead is None or lead.accepted:
         raise HTTPException(404, "Rejected finding not found")
-    lead.interested = data.interested
-    lead.interest_note = data.note if data.interested else None
-    lead.interested_at = datetime.now(timezone.utc) if data.interested else None
-    if lead.kept_concept_id is not None:
-        concept = db.get(ItemConcept, lead.kept_concept_id)
-        if concept is not None:
-            concept.interested = lead.interested
-            concept.interest_note = lead.interest_note
-            concept.interested_at = lead.interested_at
+    at = datetime.now(timezone.utc) if data.interested else None
+    synchronize_interest(lead.item_id, lead.name, data.interested, data.note, at, db)
     db.commit()
     db.refresh(lead)
     return rejected_finding_read(lead, db)
@@ -829,7 +852,8 @@ def extract_concepts(item_id: int, db: Session = Depends(get_db), ai: OpenRouter
     for previous in db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai", ItemConcept.superseded_at.is_(None))).all():
         previous.superseded_at = now
     for extracted in extraction.concepts:
-        db.add(ItemConcept(item_id=item_id, name=extracted.name.strip(), category=extracted.category, origin="ai", explanation=extracted.explanation))
+        interested, interest_note, interested_at = interest_state_for_name(item_id, extracted.name, db)
+        db.add(ItemConcept(item_id=item_id, name=extracted.name.strip(), category=extracted.category, origin="ai", explanation=extracted.explanation, interested=interested, interest_note=interest_note, interested_at=interested_at))
     db.commit()
     return db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.created_at, ItemConcept.id)).all()
 
@@ -1082,7 +1106,8 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
         source_url_by_id = {**work_source_urls, **concept_source_urls}
         source_snapshots = [{**source_payload_by_id[source_id], "url": source_url_by_id.get(source_id, ""), "source_type": "work" if source_id in work_source_ids else "independent"} for source_id in referenced_ids if source_id in source_payload_by_id]
         evidence_issue = candidate_evidence_rejection(candidate, concept_source_text, concept_source_urls)
-        db.add(ConceptLeadAudit(item_id=item_id, name=candidate.canonical_name, proposed_definition=candidate.definition, motivating_detail=motivating_detail, proposed_relationship=result.relationship_evidence if result else candidate.research_path, relationship_type=result.relationship_type if result else "unsupported", research_questions_json=json.dumps(candidate.problem_ids), accepted=bool(result and result.accepted), rejection_reason=None if result and result.accepted else final_outcome, stage="concept_candidate", discovery_origin=candidate.discovery_origin, discovery_source_ids_json=json.dumps(candidate.discovery_source_ids), research_path=candidate.research_path, initial_validation_outcome=initial_evidence_outcomes.get(candidate.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(candidate.candidate_id, {})), final_validation_outcome=final_outcome, candidate_snapshot_json=json.dumps(candidate.model_dump()), validation_snapshot_json=json.dumps(result.model_dump()) if result else "{}", source_snapshot_json=json.dumps(source_snapshots), automated_evidence_status="partially_supported" if evidence_issue is None else "unverified", evidence_review_detail=evidence_issue or "Independent concept evidence passed deterministic checks; the final automated outcome is preserved separately.", concept_classification=candidate.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in candidate.concept_evidence) else "quotation"))
+        interested, interest_note, interested_at = interest_state_for_name(item_id, candidate.canonical_name, db)
+        db.add(ConceptLeadAudit(item_id=item_id, name=candidate.canonical_name, proposed_definition=candidate.definition, motivating_detail=motivating_detail, proposed_relationship=result.relationship_evidence if result else candidate.research_path, relationship_type=result.relationship_type if result else "unsupported", research_questions_json=json.dumps(candidate.problem_ids), accepted=bool(result and result.accepted), rejection_reason=None if result and result.accepted else final_outcome, stage="concept_candidate", discovery_origin=candidate.discovery_origin, discovery_source_ids_json=json.dumps(candidate.discovery_source_ids), research_path=candidate.research_path, initial_validation_outcome=initial_evidence_outcomes.get(candidate.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(candidate.candidate_id, {})), final_validation_outcome=final_outcome, candidate_snapshot_json=json.dumps(candidate.model_dump()), validation_snapshot_json=json.dumps(result.model_dump()) if result else "{}", source_snapshot_json=json.dumps(source_snapshots), automated_evidence_status="partially_supported" if evidence_issue is None else "unverified", evidence_review_detail=evidence_issue or "Independent concept evidence passed deterministic checks; the final automated outcome is preserved separately.", concept_classification=candidate.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in candidate.concept_evidence) else "quotation", interested=interested, interest_note=interest_note, interested_at=interested_at))
     for problem in problems.problems:
         has_candidates = bool(candidates_by_problem.get(problem.problem_id))
         reason = None if has_candidates else next(iter(candidates.insufficient_evidence_reasons), "Independent research did not yield a source-grounded canonical concept for this problem.")
@@ -1097,7 +1122,8 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
                 continue
             seen_concepts.add(normalized_name)
             canonical = resolve_canonical_concept(db, extracted.canonical_name, extracted.aliases, extracted.definition, extracted.domain, extracted.mechanism, extracted.concept_verification, extracted.label_kind) if extracted.concept_classification == "established_concept" else None
-            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id if canonical else None, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.", concept_classification=extracted.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in extracted.concept_evidence) else "quotation")
+            interested, interest_note, interested_at = interest_state_for_name(item_id, extracted.canonical_name, db)
+            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id if canonical else None, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.", concept_classification=extracted.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in extracted.concept_evidence) else "quotation", interested=interested, interest_note=interest_note, interested_at=interested_at)
             db.add(concept)
             db.flush()
             support_by_url: dict[str, set[str]] = {}
@@ -1185,11 +1211,19 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         raise HTTPException(422, sidequest_rejection_detail(final.rejection_reason))
     if len(final.bridge.strip()) < 12 or len(final.where_it_breaks.strip()) < 20:
         raise HTTPException(422, sidequest_rejection_detail("The proposed connection was too broad or did not explain its limitations clearly enough."))
+    selected_pair = frozenset((final.item_a_id, final.item_b_id))
+    repeated = db.scalars(select(Sidequest)).all()
+    if any(
+        frozenset((saved.item_a_id, saved.item_b_id)) == selected_pair
+        and normalize_concept_term(saved.bridge) == normalize_concept_term(final.bridge)
+        for saved in repeated
+    ):
+        raise HTTPException(422, sidequest_rejection_detail("That conceptual bridge has already been explored for this pair."))
     sidequest = Sidequest(
         item_a_id=final.item_a_id, item_b_id=final.item_b_id, title=final.title.strip(),
         connection=final.connection.strip(), bridge=final.bridge.strip(), why_interesting=final.why_interesting.strip(),
         where_it_breaks=final.where_it_breaks.strip(), new_question=final.new_question.strip(),
-        evidence_status=final.evidence_status.strip(),
+        evidence_status="Exploratory and not externally verified.",
         concepts_json=json.dumps(final.concepts_used), evidence_json=json.dumps(final.evidence),
     )
     db.add(sidequest)
