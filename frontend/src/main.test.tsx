@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { App, ConceptExplorer, RejectedFindingCard } from './main'
+import { App, ConceptExplorer, DiscoveryCard, RejectedFindingCard } from './main'
 
 afterEach(() => {
   cleanup()
@@ -55,6 +55,44 @@ describe('human review controls', () => {
     await waitFor(() => expect(onFeedback).toHaveBeenCalledWith(finding, 'love'))
     fireEvent.click(screen.getByRole('button', { name: 'Keep anyway' }))
     await waitFor(() => expect(onReview).toHaveBeenCalledWith(finding, 'keep', ''))
+  })
+})
+
+describe('discovery card hierarchy', () => {
+  it('keeps the invitation visible, research collapsed, and reactions accessible', async () => {
+    const concept = {
+      id: 12, name: 'Humor as investigative friction', origin: 'ai',
+      definition: 'Playful speculation collides with procedural skepticism during a case.',
+      explanation: null, relationship_evidence: 'A retrieved episode account supports the interaction.', relationship: null,
+      mechanism: 'Competing tones become a practical way to test explanations without flattening the relationship.',
+      curiosity_hook: 'When can humor help people test competing explanations instead of distracting from them?',
+      user_note: null, evidence_status: 'work_supported', discovery_origin: 'work_grounded',
+      concept_classification: 'grounded_observation', level: 'mechanism', category: 'mechanism', domain: 'tone or humor',
+      loved: false, surprised: false, interested: false, interest_note: null, love_note: null, surprise_note: null,
+      source_support: [], appeal_dimensions: ['funny', 'clever'], pattern_scope: 'single_work', spoiler_scope: 'premise_only',
+      recovery_attempt: {}, relationship_type: 'explicit', research_path: 'Specific to the work.',
+      concept_verification: 'work_supported', relationship_verification: 'verified', discovery_quality: { surprise_potential: 'medium' },
+    }
+    const onFeedback = vi.fn(async () => undefined)
+    const onInterest = vi.fn(async () => undefined)
+    render(<DiscoveryCard concept={concept as never} enrichment={null} onRemove={async () => undefined} onInterest={onInterest} onFeedback={onFeedback} />)
+
+    expect(screen.getByText('Where could this lead?')).toBeInTheDocument()
+    expect(screen.getByText(concept.curiosity_hook)).toBeInTheDocument()
+    expect(screen.getByText('Research & provenance').closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByRole('button', { name: `Love ${concept.name}` })).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(screen.getByText('Add context to your reaction'))
+    fireEvent.change(screen.getByPlaceholderText(/what caught you/i), { target: { value: 'I already knew this, but I still love it.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save with Love' }))
+    await waitFor(() => expect(onFeedback).toHaveBeenCalledWith(concept, 'love', 'I already knew this, but I still love it.', true))
+  })
+
+  it('renders a short personal concept without empty research scaffolding', () => {
+    const concept = { id: 13, name: 'Mystical cafés', origin: 'user', explanation: null, definition: null, relationship_evidence: null, relationship: null, mechanism: null, curiosity_hook: null, user_note: null, loved: false, surprised: false, interested: false, interest_note: null, love_note: null, surprise_note: null, source_support: [], appeal_dimensions: [], pattern_scope: null, spoiler_scope: 'premise_only', recovery_attempt: {}, discovery_origin: null, concept_classification: null, level: null, category: 'personal', domain: null, evidence_status: null, relationship_type: null, research_path: null, concept_verification: null, relationship_verification: null, discovery_quality: {} }
+    render(<DiscoveryCard concept={concept as never} enrichment={null} onRemove={async () => undefined} onInterest={async () => undefined} onFeedback={async () => undefined} />)
+    expect(screen.getByRole('heading', { name: 'Mystical cafés' })).toBeInTheDocument()
+    expect(screen.queryByText('Research & provenance')).not.toBeInTheDocument()
+    expect(screen.queryByText('Where could this lead?')).not.toBeInTheDocument()
   })
 })
 
