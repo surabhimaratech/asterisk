@@ -61,7 +61,9 @@ If an earlier installation has `backend/curiosity.db`, Asterisk copies it to the
 - `POST /api/items/{id}/enrich` — explicitly research and enrich one item
 - `DELETE /api/concepts/{id}` — remove a concept
 - `PATCH /api/concepts/{id}/interest` — mark or unmark a concept as interesting
+- `PATCH /api/concepts/{id}/feedback` — record reversible Love or Surprise feedback
 - `PATCH /api/rejected-findings/{id}/interest` — record interest independently of review status
+- `PATCH /api/rejected-findings/{id}/feedback` — record Love or Surprise without changing evidence status
 - `GET /api/sidequests` — revisit saved Sidequests
 - `POST /api/sidequests/surprise` — generate and save one Sidequest
 
@@ -83,7 +85,9 @@ cp .env.example .env
 
 **Enrich with Research** is explicitly user-triggered and billable. For books, movies, TV series, podcasts, and articles, Asterisk first resolves the exact work. An exact high-confidence title/media match is persisted; multiple plausible matches stop at a disambiguation screen. Confirmed title, creator, year, and media type are reused by later searches, and retrieved work sources must match that identity. Correcting an identity retires stale AI findings while preserving notes, manual concepts, and audit history.
 
-After identity resolution, enrichment uses bounded OpenRouter work research and problem-oriented concept research plus structured calls for understanding, research-problem identification, evidence-grounded concept extraction, and relationship validation. Search-tool charges and ordinary model token charges apply. If retrieval produces no inspectable sources, Asterisk saves no fabricated research. Research permits full spoilers for items already in your library.
+After identity resolution, enrichment first identifies several specific anchors inside the work: character tensions, worldbuilding rules, narrative techniques, recurring motifs, striking systems, or revealing situations. It deterministically selects a diverse set of roughly 3–5 grounded observations, then researches only the strongest configured subset. `DISCOVERY_MAX_ANCHORS` defaults to `5` and `DISCOVERY_MAX_RESEARCH_ANCHORS` defaults to `3`. This selection adds no model call, and grounded observations remain useful discoveries even when they do not lead to an external academic concept or Sidequest.
+
+The selected observations support two discovery modes: **deepen fascination**, which follows something already compelling in the work, and **reveal an overlooked perspective**, which surfaces a less obvious lens. External research still uses bounded OpenRouter work research, evidence-grounded concept extraction, and relationship validation. Search-tool charges and ordinary model token charges apply. If external research fails, Asterisk does not invent a concept; the separately work-supported observations remain available. Research permits full spoilers for items already in your library.
 
 Extraction scans the full independent research corpus, not only passages that answer the first research problems. Accepted results distinguish **From the work** (`work_grounded`) from **Found while exploring** (`research_led`). Research-led concepts need independent definition and mechanism evidence plus a traceable research path, but may honestly report that no direct relationship to the saved work was established.
 
@@ -91,9 +95,9 @@ When a promising candidate fails only because its evidence cannot be verified, A
 
 Concept extraction is always user-triggered. Quick extraction uses only the saved entry and is labeled accordingly. Research results distinguish **Established concept**, **Grounded interpretation**, and **Speculative connection**. A generated interpretive label does not need to appear verbatim when its underlying mechanism and relationship are supported. Actual quotations remain subject to exact source-text checks; clearly labeled cited paraphrases may use different wording but still require a retrieved, substantive source and structured validation. Speculative connections remain in review unless the user explicitly keeps them.
 
-Rejected concept candidates can be reviewed in the Research & Concepts drawer. **Interested** is independent from **Keep anyway**, **Dismiss**, and **Re-evaluate**: it records curiosity without asserting truth. Keep anyway creates a non-canonical discovery labeled **User-kept · Unverified** or **User-kept · Partially supported** without changing the automated rejection. Reversible review history and evidence outcomes remain intact. User-kept concepts are available to exploratory features, while their sources are deliberately withheld as claim-supporting evidence and they remain outside verified-only workflows.
+Rejected concept candidates can be reviewed in the Research & Concepts drawer. **Interested**, **Love**, and **Surprise** are independent from **Keep anyway**, **Dismiss**, and **Re-evaluate**: they record personal discovery value without asserting truth. Feedback is copied across reruns only when a stable fingerprint of the underlying finding matches; similar titles alone are not enough. Keep anyway creates a non-canonical discovery labeled **User-kept · Unverified** or **User-kept · Partially supported** without changing the automated rejection. Reversible review history and evidence outcomes remain intact. User-kept concepts are available to exploratory features, while their sources are deliberately withheld as claim-supporting evidence and they remain outside verified-only workflows.
 
-Sidequests require concepts attached to at least two library items. Interested concepts increase a pair's discovery priority, while domain/type diversity and repetition penalties prevent one clicked topic from dominating. This ranking never upgrades verification. The two items may have the same type, and the critic still rejects connections that are too obvious or superficial. Every saved Sidequest remains exploratory and externally unverified.
+Sidequests require discoveries attached to at least two library items. Interest, Love, and Surprise contribute separate bounded ranking signals, while mechanism depth, grounded discoveries, domain/type diversity, and repetition penalties keep one clicked topic from dominating. Ranking never upgrades verification, and it retains an unfeedbacked exploration slot when possible. The two items may have the same type, and the critic still rejects connections that are too obvious or superficial. Every saved Sidequest remains exploratory and externally unverified.
 
 Schema changes are additive at startup for the local SQLite database: research and lead-audit tables are created and new nullable/defaulted columns are added without deleting existing data. Canonical concepts are reusable records; item concepts hold the work-specific relationship and can link multiple library items to one canonical idea. Established terms can resolve through exact canonical names or verified aliases. Descriptive labels merge only on an exact normalized name, avoiding aggressive fuzzy consolidation of distinct ideas.
 
@@ -125,8 +129,8 @@ Candidates that pass this gate still require human review for surprise, conceptu
 
 ## Roadmap
 1. **Milestone 1**: capture, list, search, filter, edit, and delete
-2. **Milestone 2 (current)**: user-triggered concept extraction and experimental Sidequests
-3. Later: evidence gathering, feedback-driven ranking, and deeper discovery strategies
+2. **Milestone 2**: user-triggered concept extraction and experimental Sidequests
+3. **Milestone 3 (current)**: work-first discoveries, dual discovery modes, and feedback-informed exploration
 
 ## Privacy
 Library data and SQLite remain local. When you explicitly use Explore Concepts or Surprise Me, relevant titles, notes, URL strings, and concepts are sent to the configured AI provider. API keys remain in backend environment variables and are never sent to the browser or stored in Git.

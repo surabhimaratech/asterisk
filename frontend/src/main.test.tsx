@@ -30,13 +30,17 @@ describe('human review controls', () => {
       initial_validation_outcome: 'Quote failed.', recovery_attempt: {}, final_validation_outcome: 'Still unverified.', automated_evidence_status: 'unverified' as const,
       human_review_status: 'pending' as const, human_review_note: null, review_history: [], kept_concept_id: null, evidence_review_detail: null, last_evaluated_at: null,
       candidate: {}, validation: {}, sources: [], superseded_at: null, concept_classification: 'grounded_interpretation' as const, evidence_form: 'paraphrase' as const,
-      interested: false, interest_note: null, interested_at: null, created_at: new Date().toISOString(),
+      feedback_key: 'stable-key', discovery_mode: 'deepen_fascination' as const, discovery_quality: { specificity: 'high', intellectual_substance: 'high', surprise_potential: 'medium' },
+      interested: false, interest_note: null, interested_at: null, loved: false, love_note: null, loved_at: null, surprised: false, surprise_note: null, surprised_at: null, created_at: new Date().toISOString(),
     }
-    render(<RejectedFindingCard finding={finding} onReview={onReview} onReevaluate={async () => undefined} onInterest={onInterest} />)
+    const onFeedback = vi.fn(async () => undefined)
+    render(<RejectedFindingCard finding={finding} onReview={onReview} onReevaluate={async () => undefined} onInterest={onInterest} onFeedback={onFeedback} />)
     expect(screen.getByText(/GROUNDED INTERPRETATION/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '☆ Interested' }))
     await waitFor(() => expect(onInterest).toHaveBeenCalledOnce())
     expect(onReview).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '♡ Love' }))
+    await waitFor(() => expect(onFeedback).toHaveBeenCalledWith(finding, 'love'))
     fireEvent.click(screen.getByRole('button', { name: 'Keep anyway' }))
     await waitFor(() => expect(onReview).toHaveBeenCalledWith(finding, 'keep', ''))
   })

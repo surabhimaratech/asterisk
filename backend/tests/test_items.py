@@ -170,7 +170,7 @@ class FakeAI:
         return WorkUnderstanding(ambiguous_identity=False, confirmation_question="", resolved_title=str(item["title"]), creator="Test creator", release_info="2021", identity_summary="A researched work.", events_and_problems=["A community changes its institutions."], phenomena_and_processes=["Coordination under constraints."], dilemmas_and_decisions=["Actors choose without complete information."], systems_and_causal_relations=["Local choices alter collective outcomes."])
 
     def identify_research_problems(self, _understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
-        return ResearchProblemBatch(problems=[ResearchProblem(problem_id="problem-1", concrete_description="A community changes its institutional rules.", work_situation="The work compares changing social arrangements.", intellectual_question="How do communities test alternative institutional forms?", relevant_domains=["political anthropology"], evidence_source_ids=[work_sources[0]["source_id"]], research_queries=["established term institutional forms testing collective rules"])])
+        return ResearchProblemBatch(problems=[ResearchProblem(problem_id="problem-1", concrete_description="A community changes its institutional rules.", work_situation="The work compares changing social arrangements.", intellectual_question="How do communities test alternative institutional forms?", relevant_domains=["political anthropology"], evidence_source_ids=[work_sources[0]["source_id"]], research_queries=["established term institutional forms testing collective rules"], anchor_kind="system", concise_label="Testing social arrangements", interesting_reason="The work treats political organization as something communities can deliberately vary rather than a fixed evolutionary stage.", distinctiveness="The comparison centers concrete institutional experiments instead of a generic theme of social change.", discovery_mode="deepen_fascination", external_research_warranted=True, discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "medium", "rationale": "A concrete institutional mechanism with cross-domain potential."})])
 
     def extract_evidence_concepts(self, problems: ResearchProblemBatch, _concept_synthesis: str, concept_sources: list[dict[str, str]]) -> EvidenceConceptBatch:
         return EvidenceConceptBatch(candidates=[EvidenceConceptCandidate(candidate_id="candidate-1", problem_ids=[problems.problems[0].problem_id], discovery_origin="work_grounded", discovery_source_ids=[concept_sources[0]["source_id"]], research_path="Research into how communities test alternate rules led to an independent account of institutional experimentation.", label_kind="established_term", canonical_name="Institutional experimentation", aliases=["institutional experiments"], definition="Deliberate or emergent testing of institutional forms.", domain="political anthropology", mechanism="Rules change incentives and collective behavior.", concept_evidence=[EvidenceReference(source_id=concept_sources[0]["source_id"], excerpt="Institutional experimentation tests alternate rules and arrangements in collective life.")], curiosity_hook="When do changes in collective rules become durable institutional experiments?", uncertainty="The term is used differently across disciplines.")], insufficient_evidence_reasons=[])
@@ -286,8 +286,11 @@ def test_research_enrichment_persists_sources_and_preserves_manual_concepts(clie
     assert second.status_code == 200
     assert second.json()["status"] == "researched"
     assert len(second.json()["sources"]) == 2
-    assert {concept["name"] for concept in second.json()["concepts"]} == {"My lens", "Institutional experimentation"}
-    enriched = next(concept for concept in second.json()["concepts"] if concept["origin"] == "ai")
+    assert {concept["name"] for concept in second.json()["concepts"]} == {"My lens", "Testing social arrangements", "Institutional experimentation"}
+    observation = next(concept for concept in second.json()["concepts"] if concept["concept_classification"] == "grounded_observation")
+    assert observation["evidence_status"] == "work_supported"
+    assert observation["canonical_concept_id"] is None
+    enriched = next(concept for concept in second.json()["concepts"] if concept["concept_classification"] == "established_concept")
     assert enriched["level"] == "concept"
     assert enriched["evidence_status"] == "supported"
     assert set(enriched["source_ids"]) == {source["id"] for source in second.json()["sources"]}
@@ -415,13 +418,13 @@ def test_missing_source_can_be_re_evaluated_against_available_evidence(client: T
     assert "original relationship rejection" in after["evidence_review_detail"]
 
 
-def test_research_problem_cannot_be_kept_as_a_concept(client: TestClient) -> None:
+def test_grounded_observation_is_not_misrepresented_as_a_rejected_concept(client: TestClient) -> None:
     item_id = create_item(client).json()["id"]
     app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
     app.dependency_overrides[get_ai_client] = lambda: InsufficientEvidenceAI()
-    finding = client.post(f"/api/items/{item_id}/enrich").json()["rejected_leads"][0]
-    response = client.patch(f"/api/rejected-findings/{finding['id']}/review", json={"decision": "keep"})
-    assert response.status_code == 422
+    result = client.post(f"/api/items/{item_id}/enrich").json()
+    assert any(concept["concept_classification"] == "grounded_observation" for concept in result["concepts"])
+    assert not [finding for finding in result["rejected_leads"] if finding["stage"] == "work_anchor"]
 
 
 def test_review_api_validates_decisions_and_note_length(client: TestClient) -> None:
@@ -438,14 +441,12 @@ def test_insufficient_evidence_reports_research_problem_stage(client: TestClient
     response = client.post(f"/api/items/{item_id}/enrich")
 
     assert response.status_code == 200
-    assert not [concept for concept in response.json()["concepts"] if concept["origin"] == "ai"]
-    rejected = response.json()["rejected_leads"]
-    assert rejected[0]["stage"] == "research_problem"
-    assert "Insufficient evidence" in rejected[0]["rejection_reason"]
-    assert "do not define an independent concept" in rejected[0]["rejection_reason"]
+    observations = [concept for concept in response.json()["concepts"] if concept["concept_classification"] == "grounded_observation"]
+    assert len(observations) == 1
+    assert not [concept for concept in response.json()["concepts"] if concept["concept_classification"] == "established_concept"]
 
 
-def test_partial_concept_research_failure_preserves_previous_enrichment(client: TestClient) -> None:
+def test_partial_concept_research_failure_still_preserves_grounded_observation(client: TestClient) -> None:
     item_id = create_item(client).json()["id"]
     app.dependency_overrides[get_ai_client] = lambda: FakeAI()
     app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
@@ -455,10 +456,10 @@ def test_partial_concept_research_failure_preserves_previous_enrichment(client: 
     failed = client.post(f"/api/items/{item_id}/enrich")
     after = client.get(f"/api/items/{item_id}/enrichment").json()
 
-    assert failed.status_code == 502
-    assert "Targeted concept research failed" in failed.json()["detail"]
-    assert [source["url"] for source in after["sources"]] == [source["url"] for source in before["sources"]]
-    assert [concept["id"] for concept in after["concepts"]] == [concept["id"] for concept in before["concepts"]]
+    assert failed.status_code == 200
+    assert any(concept["concept_classification"] == "grounded_observation" for concept in after["concepts"])
+    assert not [concept for concept in after["concepts"] if concept["concept_classification"] == "established_concept"]
+    assert before["concepts"]
 
 
 def test_canonical_concept_is_reused_across_items(client: TestClient) -> None:
@@ -470,8 +471,8 @@ def test_canonical_concept_is_reused_across_items(client: TestClient) -> None:
     first_concepts = client.post(f"/api/items/{first}/enrich").json()["concepts"]
     second_concepts = client.post(f"/api/items/{second}/enrich").json()["concepts"]
 
-    first_ai = next(concept for concept in first_concepts if concept["origin"] == "ai")
-    second_ai = next(concept for concept in second_concepts if concept["origin"] == "ai")
+    first_ai = next(concept for concept in first_concepts if concept["concept_classification"] == "established_concept")
+    second_ai = next(concept for concept in second_concepts if concept["concept_classification"] == "established_concept")
     assert first_ai["canonical_concept_id"] == second_ai["canonical_concept_id"]
 
 
@@ -480,10 +481,10 @@ def test_verified_alias_reuses_canonical_without_string_similarity_merge(client:
     second = create_item(client, title="A second work").json()["id"]
     app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
     app.dependency_overrides[get_ai_client] = lambda: FakeAI()
-    first_ai = next(concept for concept in client.post(f"/api/items/{first}/enrich").json()["concepts"] if concept["origin"] == "ai")
+    first_ai = next(concept for concept in client.post(f"/api/items/{first}/enrich").json()["concepts"] if concept["concept_classification"] == "established_concept")
 
     app.dependency_overrides[get_ai_client] = lambda: AliasAI()
-    second_ai = next(concept for concept in client.post(f"/api/items/{second}/enrich").json()["concepts"] if concept["origin"] == "ai")
+    second_ai = next(concept for concept in client.post(f"/api/items/{second}/enrich").json()["concepts"] if concept["concept_classification"] == "established_concept")
 
     assert first_ai["canonical_concept_id"] == second_ai["canonical_concept_id"]
     assert second_ai["name"] == "Institutional experiments"
@@ -585,6 +586,53 @@ class NamedWorkAI(FakeAI):
         return EntityResolution(status="confirmed", reason="One exact title and media-type match.", candidates=candidates)
 
 
+class WorkFirstDiscoveryAI(FakeAI):
+    """Deterministic acceptance fixture: work observations require no paid research."""
+
+    anchors_by_title = {
+        "Castle": [
+            ("relationship", "Mystery as courtship", "Castle and Beckett turn episodic investigations into an evolving contest of trust, attraction, and professional restraint."),
+            ("narrative_structure", "Cases inside a longer arc", "Self-contained weekly cases supply closure while the unresolved conspiracy and central relationship accumulate across seasons."),
+            ("tone_or_humor", "Humor as investigative friction", "Castle's playful speculation and Beckett's procedural skepticism make comic disagreement part of how competing explanations are tested."),
+        ],
+        "The Hunger Games": [
+            ("system", "Spectacle as political control", "The arena turns punishment into compulsory entertainment, making spectatorship itself part of the regime's control system."),
+            ("relationship", "Private care as public resistance", "Small acts of care become politically disruptive when an authoritarian spectacle demands visible rivalry and obedience."),
+            ("worldbuilding", "An arena engineered to narrate power", "The designed environment controls resources, threats, and camera attention so that physical survival also produces a political story."),
+        ],
+        "A Psalm for the Wild-Built": [
+            ("philosophical_question", "Need beyond usefulness", "Dex's search asks what a person needs when productivity, service, and competence do not produce a felt sense of fulfillment."),
+            ("relationship", "Memory meets fresh perception", "A human carrying accumulated obligations meets a robot whose questions make ordinary needs appear strange and newly examinable."),
+            ("worldbuilding", "Ecological restraint as infrastructure", "The setting treats limits on extraction as a durable social arrangement rather than a temporary response to crisis."),
+            ("tone_or_humor", "Companionship through patient questions", "Gentle conversation and small misunderstandings let companionship emerge through attention instead of dramatic rescue or conquest."),
+        ],
+    }
+
+    def resolve_identity(self, item: dict[str, object], synthesis: str, sources: list[dict[str, str]]) -> EntityResolution:
+        if item["title"] == "Castle":
+            return NamedWorkAI().resolve_identity(item, synthesis, sources)
+        return super().resolve_identity(item, synthesis, sources)
+
+    def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
+        anchors = self.anchors_by_title[str(understanding.resolved_title)]
+        return ResearchProblemBatch(problems=[ResearchProblem(
+            problem_id=f"anchor-{index}", anchor_kind=kind, concise_label=label,
+            concrete_description=detail, work_situation=detail,
+            interesting_reason=f"This is worth following because {detail[0].lower() + detail[1:]}",
+            distinctiveness=f"This anchor isolates the specific mechanism behind {label.lower()} rather than reducing the work to a broad theme.",
+            intellectual_question=f"What changes when we treat {label.lower()} as an operating mechanism rather than background?",
+            relevant_domains=["narrative design", "social systems"], evidence_source_ids=[work_sources[0]["source_id"]],
+            research_queries=[], discovery_mode="deepen_fascination" if index % 2 else "reveal_overlooked_perspective",
+            external_research_warranted=False,
+            discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "high" if index % 2 else "medium", "rationale": "A specific work-grounded mechanism."},
+        ) for index, (kind, label, detail) in enumerate(anchors, 1)])
+
+
+class WorkOnlyResearch(FakeResearch):
+    def research_problems(self, _item: dict[str, object], _problems: list[dict[str, object]]) -> ResearchPacket:
+        raise AssertionError("Work-supported observations must not trigger external concept research.")
+
+
 @pytest.mark.parametrize(("title", "expected_creator"), [("Castle", "Andrew W. Marlowe"), ("Game of Thrones", "David Benioff and D. B. Weiss")])
 def test_entity_resolution_prefers_exact_tv_series_and_rejects_namesakes(client: TestClient, title: str, expected_creator: str) -> None:
     item_id = create_item(client, kind="tv_series", title=title).json()["id"]
@@ -597,6 +645,111 @@ def test_entity_resolution_prefers_exact_tv_series_and_rejects_namesakes(client:
     assert response.json()["identity_status"] == "confirmed"
     assert response.json()["resolved_title"] == title
     assert response.json()["creator"] == expected_creator
+
+
+@pytest.mark.parametrize(("title", "kind", "expected_labels"), [
+    ("Castle", "tv_series", {"Mystery as courtship", "Cases inside a longer arc", "Humor as investigative friction"}),
+    ("The Hunger Games", "book", {"Spectacle as political control", "Private care as public resistance", "An arena engineered to narrate power"}),
+    ("A Psalm for the Wild-Built", "book", {"Need beyond usefulness", "Memory meets fresh perception", "Ecological restraint as infrastructure", "Companionship through patient questions"}),
+])
+def test_work_first_acceptance_examples_produce_specific_standalone_discoveries(
+    client: TestClient, title: str, kind: str, expected_labels: set[str],
+) -> None:
+    item_id = create_item(client, kind=kind, title=title).json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: WorkFirstDiscoveryAI()
+    app.dependency_overrides[get_research_provider] = lambda: WorkOnlyResearch()
+
+    response = client.post(f"/api/items/{item_id}/enrich")
+
+    assert response.status_code == 200
+    if title == "Castle":
+        assert response.json()["resolved_title"] == "Castle"
+        assert response.json()["creator"] == "Andrew W. Marlowe"
+        assert response.json()["release_info"] == "2009"
+    discoveries = [concept for concept in response.json()["concepts"] if concept["concept_classification"] == "grounded_observation"]
+    assert {concept["name"] for concept in discoveries} == expected_labels
+    assert all(concept["canonical_concept_id"] is None for concept in discoveries)
+    assert all(concept["evidence_status"] == "work_supported" for concept in discoveries)
+    assert all(concept["discovery_quality"]["intellectual_substance"] == "high" for concept in discoveries)
+    assert {concept["discovery_mode"] for concept in discoveries} == {"deepen_fascination", "reveal_overlooked_perspective"}
+
+
+def test_anchor_and_research_limits_are_bounded_and_configurable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISCOVERY_MAX_ANCHORS", "4")
+    monkeypatch.setenv("DISCOVERY_MAX_RESEARCH_ANCHORS", "2")
+    captured: list[dict[str, object]] = []
+
+    class ManyAnchorAI(FakeAI):
+        def identify_research_problems(self, _understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
+            kinds = ["event", "relationship", "worldbuilding", "narrative_structure", "tone_or_humor", "motif"]
+            return ResearchProblemBatch(problems=[ResearchProblem(
+                problem_id=f"candidate-{index}", anchor_kind=kind, concise_label=f"Distinct mechanism {index}",
+                concrete_description=f"A specific sequence {index} changes how characters coordinate under a clearly described constraint.",
+                work_situation=f"The retrieved work account describes sequence {index} and its concrete consequences for later choices.",
+                interesting_reason=f"Sequence {index} exposes a distinct causal pattern in how limited information changes coordinated action.",
+                distinctiveness=f"This isolates causal pattern {index} rather than naming a broad topic shared by many works.",
+                intellectual_question=f"How does causal pattern {index} reshape coordination under constraint?",
+                relevant_domains=["systems", "narrative"], evidence_source_ids=[work_sources[0]["source_id"]],
+                research_queries=[f"causal pattern {index} coordination under constraint"], external_research_warranted=True,
+                discovery_mode="deepen_fascination" if index % 2 else "reveal_overlooked_perspective",
+                discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "medium", "rationale": "Concrete and transferable."},
+            ) for index, kind in enumerate(kinds, 1)])
+
+    class TrackingResearch(FakeResearch):
+        def research_problems(self, item: dict[str, object], problems: list[dict[str, object]]) -> ResearchPacket:
+            captured.extend(problems)
+            return super().research_problems(item, problems)
+
+    item_id = create_item(client).json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: ManyAnchorAI()
+    app.dependency_overrides[get_research_provider] = lambda: TrackingResearch()
+    response = client.post(f"/api/items/{item_id}/enrich")
+
+    assert response.status_code == 200
+    assert len(captured) == 2
+    assert len([concept for concept in response.json()["concepts"] if concept["concept_classification"] == "grounded_observation"]) == 4
+
+
+def test_love_and_surprise_survive_only_exact_observation_reruns(client: TestClient) -> None:
+    ai = WorkFirstDiscoveryAI()
+    item_id = create_item(client, title="The Hunger Games").json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    app.dependency_overrides[get_research_provider] = lambda: WorkOnlyResearch()
+    first = client.post(f"/api/items/{item_id}/enrich").json()
+    target = next(concept for concept in first["concepts"] if concept["name"] == "Spectacle as political control")
+    assert client.patch(f"/api/concepts/{target['id']}/feedback", json={"signal": "love", "active": True, "note": "This stayed with me."}).status_code == 200
+    assert client.patch(f"/api/concepts/{target['id']}/feedback", json={"signal": "surprise", "active": True}).status_code == 200
+
+    rerun = client.post(f"/api/items/{item_id}/enrich").json()
+    carried = next(concept for concept in rerun["concepts"] if concept["name"] == target["name"])
+    assert carried["loved"] is True and carried["surprised"] is True
+    assert carried["love_note"] == "This stayed with me."
+    cleared = client.patch(f"/api/concepts/{carried['id']}/feedback", json={"signal": "love", "active": False})
+    assert cleared.status_code == 200 and cleared.json()["loved"] is False
+    restored = client.patch(f"/api/concepts/{carried['id']}/feedback", json={"signal": "love", "active": True})
+    assert restored.status_code == 200 and restored.json()["loved"] is True
+
+    original = ai.anchors_by_title["The Hunger Games"]
+    ai.anchors_by_title = {**ai.anchors_by_title, "The Hunger Games": [
+        (original[0][0], original[0][1], "A different underlying observation happens to share the old display label but describes unrelated material."),
+        *original[1:],
+    ]}
+    changed = client.post(f"/api/items/{item_id}/enrich").json()
+    unrelated = next(concept for concept in changed["concepts"] if concept["name"] == target["name"])
+    assert unrelated["loved"] is False and unrelated["surprised"] is False
+
+
+def test_manual_feedback_does_not_transfer_to_generated_observation_with_same_label(client: TestClient) -> None:
+    item_id = create_item(client, title="The Hunger Games").json()["id"]
+    manual = client.post(f"/api/items/{item_id}/concepts", json={"name": "Spectacle as political control", "category": "personal"}).json()
+    assert client.patch(f"/api/concepts/{manual['id']}/feedback", json={"signal": "love", "active": True}).status_code == 200
+    app.dependency_overrides[get_ai_client] = lambda: WorkFirstDiscoveryAI()
+    app.dependency_overrides[get_research_provider] = lambda: WorkOnlyResearch()
+
+    result = client.post(f"/api/items/{item_id}/enrich").json()
+
+    observation = next(concept for concept in result["concepts"] if concept["concept_classification"] == "grounded_observation" and concept["name"] == manual["name"])
+    assert observation["loved"] is False
 
 
 def test_research_stops_when_sources_do_not_match_confirmed_identity(client: TestClient) -> None:
@@ -684,7 +837,7 @@ def test_grounded_interpretations_are_accepted_without_academic_label_match(
     response = client.post(f"/api/items/{item_id}/enrich")
 
     assert response.status_code == 200
-    concept = response.json()["concepts"][0]
+    concept = next(concept for concept in response.json()["concepts"] if concept["name"] == label)
     assert concept["name"] == label
     assert concept["concept_classification"] == "grounded_interpretation"
     assert concept["relationship_verification"] == "supported_interpretation"
@@ -773,9 +926,9 @@ def test_additive_migration_preserves_ids_and_only_recategorizes_known_tv_titles
     migrate_additive_columns(migration_engine, f"sqlite:///{database}")
     with migration_engine.begin() as connection:
         rows = connection.exec_driver_sql("SELECT id, kind, title FROM curiosity_items ORDER BY id").fetchall()
-        preserved = connection.exec_driver_sql("SELECT (SELECT count(*) FROM item_concepts WHERE id = 10 AND superseded_at IS NOT NULL), (SELECT count(*) FROM research_sources WHERE id = 20 AND superseded_at IS NOT NULL), (SELECT count(*) FROM concept_lead_audits WHERE id = 30 AND superseded_at IS NOT NULL), (SELECT status FROM item_enrichments WHERE item_id = 1)").fetchone()
+        preserved = connection.exec_driver_sql("SELECT (SELECT count(*) FROM item_concepts WHERE id = 10 AND superseded_at IS NOT NULL), (SELECT count(*) FROM research_sources WHERE id = 20 AND superseded_at IS NOT NULL), (SELECT count(*) FROM concept_lead_audits WHERE id = 30 AND superseded_at IS NOT NULL), (SELECT status FROM item_enrichments WHERE item_id = 1), (SELECT loved FROM item_concepts WHERE id = 10), (SELECT surprised FROM item_concepts WHERE id = 10)").fetchone()
     assert rows == [(1, "tv_series", "Castle"), (2, "movie", "An Ambiguous Title"), (3, "tv_series", "Game of Thrones")]
-    assert preserved == (1, 1, 1, "needs_confirmation")
+    assert preserved == (1, 1, 1, "needs_confirmation", 0, 0)
 
     with migration_engine.begin() as connection:
         connection.exec_driver_sql("INSERT INTO curiosity_items (id, kind, title) VALUES (4, 'movie', 'Castle')")
@@ -806,7 +959,7 @@ def test_interest_is_independent_from_review_and_evidence_status(client: TestCli
 
     kept = client.patch(f"/api/rejected-findings/{finding_id}/review", json={"decision": "keep"})
     concept_id = kept.json()["kept_concept_id"]
-    concept = client.get(f"/api/items/{item_id}/concepts").json()[0]
+    concept = next(concept for concept in client.get(f"/api/items/{item_id}/concepts").json() if concept["id"] == concept_id)
     assert concept["id"] == concept_id and concept["interested"] is True
     undone = client.patch(f"/api/concepts/{concept_id}/interest", json={"interested": False})
     assert undone.json()["interested"] is False
@@ -820,7 +973,7 @@ def test_interest_persists_across_research_reruns(client: TestClient) -> None:
     app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
     app.dependency_overrides[get_ai_client] = lambda: FakeAI()
     first = client.post(f"/api/items/{item_id}/enrich").json()
-    first_concept = first["concepts"][0]
+    first_concept = next(concept for concept in first["concepts"] if concept["name"] == "Institutional experimentation")
     marked = client.patch(f"/api/concepts/{first_concept['id']}/interest", json={"interested": True, "note": "Keep following this mechanism."})
     assert marked.status_code == 200
 
@@ -828,16 +981,17 @@ def test_interest_persists_across_research_reruns(client: TestClient) -> None:
 
     assert rerun.status_code == 200
     current = rerun.json()["concepts"]
-    assert len(current) == 1
-    assert current[0]["id"] != first_concept["id"]
-    assert current[0]["interested"] is True
-    assert current[0]["interest_note"] == "Keep following this mechanism."
+    current_concept = next(concept for concept in current if concept["name"] == "Institutional experimentation")
+    assert current_concept["id"] != first_concept["id"]
+    assert current_concept["interested"] is True
+    assert current_concept["interest_note"] == "Keep following this mechanism."
 
-    cleared = client.patch(f"/api/concepts/{current[0]['id']}/interest", json={"interested": False})
+    cleared = client.patch(f"/api/concepts/{current_concept['id']}/interest", json={"interested": False})
     assert cleared.status_code == 200
     rerun_after_reversal = client.post(f"/api/items/{item_id}/enrich")
     assert rerun_after_reversal.status_code == 200
-    assert rerun_after_reversal.json()["concepts"][0]["interested"] is False
+    reversed_concept = next(concept for concept in rerun_after_reversal.json()["concepts"] if concept["name"] == "Institutional experimentation")
+    assert reversed_concept["interested"] is False
 
 
 def test_interest_persists_across_quick_extraction_reruns(client: TestClient) -> None:
@@ -879,6 +1033,33 @@ def test_interest_prioritizes_sidequest_pairs_without_changing_verification(clie
     assert concepts[0]["concept_verification"] is None
 
 
+def test_love_and_surprise_shape_sidequests_without_overriding_verification_or_exploration(client: TestClient) -> None:
+    item_ids = [create_item(client, title=f"Curiosity {index}").json()["id"] for index in range(1, 5)]
+    concept_ids = [
+        client.post(f"/api/items/{item_id}/concepts", json={"name": f"Mechanism {index}", "category": "mechanism"}).json()["id"]
+        for index, item_id in enumerate(item_ids, 1)
+    ]
+    assert client.patch(f"/api/concepts/{concept_ids[0]}/feedback", json={"signal": "love", "active": True}).status_code == 200
+    assert client.patch(f"/api/concepts/{concept_ids[1]}/feedback", json={"signal": "surprise", "active": True}).status_code == 200
+
+    class CapturingAI(FakeAI):
+        pairs: list[tuple[int, int]] = []
+
+        def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
+            self.pairs = [(pair["item_a"]["id"], pair["item_b"]["id"]) for pair in pairs]  # type: ignore[index]
+            return super().generate_candidates(pairs)
+
+    ai = CapturingAI()
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    created = client.post("/api/sidequests/surprise")
+
+    assert created.status_code == 201
+    assert item_ids[0] in ai.pairs[0]
+    assert any(set(pair) == {item_ids[2], item_ids[3]} for pair in ai.pairs)
+    assert client.get(f"/api/items/{item_ids[0]}/concepts").json()[0]["concept_verification"] is None
+    assert created.json()["evidence_status"] == "Exploratory and not externally verified."
+
+
 def test_sidequest_rejects_repeated_bridge_and_forces_exploratory_status(client: TestClient) -> None:
     first = create_item(client, title="First").json()["id"]
     second = create_item(client, title="Second").json()["id"]
@@ -916,7 +1097,7 @@ def test_quality_gate_rejects_obvious_comparisons(connection: str) -> None:
 
 
 def test_research_problem_requires_work_evidence_and_descriptive_queries() -> None:
-    problem = ResearchProblem(problem_id="p1", concrete_description="Investigators infer a system's purpose from behavior.", work_situation="The crew observes an unfamiliar mechanism.", intellectual_question="How can function be inferred without specifications?", relevant_domains=["philosophy of science", "engineering"], evidence_source_ids=["work-1"], research_queries=["inferring system function from observed behavior without specifications"])
+    problem = ResearchProblem(problem_id="p1", concrete_description="Investigators infer a system's purpose from behavior.", work_situation="The crew observes an unfamiliar mechanism.", intellectual_question="How can function be inferred without specifications?", relevant_domains=["philosophy of science", "engineering"], evidence_source_ids=["work-1"], research_queries=["inferring system function from observed behavior without specifications"], anchor_kind="system", concise_label="Inferring purpose from behavior", interesting_reason="The investigators must reason about intended function using only repeated behavior and incomplete observations of the mechanism.", distinctiveness="The problem concerns inference without specifications, not a generic encounter with unknown technology.")
     assert research_problem_rejection(problem, {"work-1"}, "A Fictional Work") is None
 
     invented_source = problem.model_copy(update={"evidence_source_ids": ["work-altered"]})
@@ -1124,7 +1305,7 @@ def test_targeted_evidence_recovery_is_bounded_and_persisted(client: TestClient,
     response = client.post(f"/api/items/{item_id}/enrich")
     assert response.status_code == 200
     assert research.calls == 1
-    recovered = next(concept for concept in response.json()["concepts"] if concept["origin"] == "ai")
+    recovered = next(concept for concept in response.json()["concepts"] if concept["concept_classification"] == "established_concept")
     assert recovered["recovery_attempt"]["existing_corpus_review_attempted"] is True
     assert recovered["recovery_attempt"]["targeted_retrieval_attempted"] is True
     assert recovered["final_validation_outcome"] == "Accepted after final validation."
@@ -1162,7 +1343,8 @@ def test_missing_recovery_evidence_remains_rejected_with_audit(client: TestClien
     app.dependency_overrides[get_research_provider] = lambda: MissingRecoveryResearch()
     response = client.post(f"/api/items/{item_id}/enrich")
     assert response.status_code == 200
-    assert not [concept for concept in response.json()["concepts"] if concept["origin"] == "ai"]
+    assert not [concept for concept in response.json()["concepts"] if concept["concept_classification"] == "established_concept"]
+    assert any(concept["concept_classification"] == "grounded_observation" for concept in response.json()["concepts"])
     rejected = response.json()["rejected_leads"][0]
     assert rejected["recovery_attempt"]["targeted_retrieval_attempted"] is True
     assert "no supporting definition" in rejected["recovery_attempt"]["recovery_reason"]

@@ -27,6 +27,15 @@ def research_problem_rejection(problem: ResearchProblem, work_source_ids: set[st
     cited_ids = set(problem.evidence_source_ids)
     if not cited_ids or not cited_ids <= work_source_ids:
         return "The research problem cites evidence that is not present in the retrieved work corpus."
+    if not problem.concise_label.strip() or len(problem.interesting_reason.strip()) < 35:
+        return "The work anchor does not clearly state what makes the concrete detail interesting."
+    if len(problem.distinctiveness.strip()) < 25:
+        return "The work anchor does not explain why it is distinctive rather than a generic theme."
+    if problem.external_research_warranted and not problem.research_queries:
+        return "The work anchor requests external research without a descriptive search query."
+    generic_anchor = re.sub(r"[^a-z0-9]+", " ", f"{problem.concise_label} {problem.concrete_description}".casefold())
+    if any(phrase in generic_anchor for phrase in ("themes of", "human nature", "good versus evil", "societal change", "character development")):
+        return "The proposed work anchor is a broad theme rather than a distinctive observation."
     normalized_title = re.sub(r"[^a-z0-9]+", " ", work_title.casefold()).strip()
     for query in problem.research_queries:
         normalized_query = re.sub(r"[^a-z0-9]+", " ", query.casefold()).strip()

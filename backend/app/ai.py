@@ -110,6 +110,20 @@ class WorkUnderstanding(BaseModel):
     phenomena_and_processes: list[str] = Field(max_length=8)
     dilemmas_and_decisions: list[str] = Field(max_length=8)
     systems_and_causal_relations: list[str] = Field(max_length=8)
+    character_relationships_and_tensions: list[str] = Field(default_factory=list, max_length=8)
+    worldbuilding_rules_and_constraints: list[str] = Field(default_factory=list, max_length=8)
+    narrative_structures_and_techniques: list[str] = Field(default_factory=list, max_length=8)
+    tone_humor_and_motifs: list[str] = Field(default_factory=list, max_length=8)
+
+
+class DiscoveryQuality(BaseModel):
+    """Discovery value is intentionally separate from evidence verification."""
+
+    model_config = ConfigDict(extra="forbid")
+    specificity: Literal["high", "medium", "low"] = "medium"
+    intellectual_substance: Literal["high", "medium", "low"] = "medium"
+    surprise_potential: Literal["high", "medium", "low"] = "medium"
+    rationale: str = Field(default="", max_length=700)
 
 
 class ResearchProblem(BaseModel):
@@ -120,12 +134,19 @@ class ResearchProblem(BaseModel):
     intellectual_question: str = Field(min_length=1, max_length=500)
     relevant_domains: list[str] = Field(min_length=1, max_length=5)
     evidence_source_ids: list[str] = Field(min_length=1, max_length=5)
-    research_queries: list[str] = Field(min_length=1, max_length=4)
+    research_queries: list[str] = Field(max_length=4)
+    anchor_kind: Literal["event", "relationship", "worldbuilding", "narrative_structure", "tone_or_humor", "philosophical_question", "system", "motif"] = "system"
+    concise_label: str = Field(default="", max_length=120)
+    interesting_reason: str = Field(default="", max_length=1000)
+    distinctiveness: str = Field(default="", max_length=700)
+    discovery_mode: Literal["deepen_fascination", "reveal_overlooked_perspective"] = "deepen_fascination"
+    external_research_warranted: bool = True
+    discovery_quality: DiscoveryQuality = Field(default_factory=DiscoveryQuality)
 
 
 class ResearchProblemBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    problems: list[ResearchProblem] = Field(min_length=1, max_length=5)
+    problems: list[ResearchProblem] = Field(min_length=1, max_length=8)
 
 
 class EvidenceReference(BaseModel):

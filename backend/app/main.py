@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import combinations
@@ -15,7 +16,7 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, fiel
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, delete, inspect, select, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from .ai import AIConfigurationError, AIProviderError, EvidenceConceptCandidate, EntityCandidate, OpenRouterClient, get_ai_client
+from .ai import AIConfigurationError, AIProviderError, ConceptValidationBatch, EvidenceConceptBatch, EvidenceConceptCandidate, EntityCandidate, OpenRouterClient, ResearchProblemBatch, get_ai_client
 from .quality import candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from .research import ResearchProvider, get_research_provider
 
@@ -104,9 +105,18 @@ class ItemConcept(Base):
     user_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     concept_classification: Mapped[str | None] = mapped_column(String(40), nullable=True)
     evidence_form: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    feedback_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    discovery_mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    discovery_quality_json: Mapped[str] = mapped_column(Text, default="{}")
     interested: Mapped[bool] = mapped_column(default=False)
     interest_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     interested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    loved: Mapped[bool] = mapped_column(default=False)
+    love_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    loved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    surprised: Mapped[bool] = mapped_column(default=False)
+    surprise_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    surprised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -198,9 +208,18 @@ class ConceptLeadAudit(Base):
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     concept_classification: Mapped[str | None] = mapped_column(String(40), nullable=True)
     evidence_form: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    feedback_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    discovery_mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    discovery_quality_json: Mapped[str] = mapped_column(Text, default="{}")
     interested: Mapped[bool] = mapped_column(default=False)
     interest_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     interested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    loved: Mapped[bool] = mapped_column(default=False)
+    love_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    loved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    surprised: Mapped[bool] = mapped_column(default=False)
+    surprise_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    surprised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class ItemCreate(BaseModel):
@@ -290,9 +309,18 @@ class ConceptRead(BaseModel):
     user_note: str | None
     concept_classification: str | None
     evidence_form: str | None
+    feedback_key: str | None
+    discovery_mode: str | None
+    discovery_quality: dict[str, object] = Field(default_factory=dict)
     interested: bool
     interest_note: str | None
     interested_at: datetime | None
+    loved: bool
+    love_note: str | None
+    loved_at: datetime | None
+    surprised: bool
+    surprise_note: str | None
+    surprised_at: datetime | None
     created_at: datetime
 
 class ReviewDecision(BaseModel):
@@ -330,9 +358,18 @@ class RejectedFindingRead(BaseModel):
     superseded_at: datetime | None
     concept_classification: str | None
     evidence_form: str | None
+    feedback_key: str | None
+    discovery_mode: str | None
+    discovery_quality: dict[str, object] = Field(default_factory=dict)
     interested: bool
     interest_note: str | None
     interested_at: datetime | None
+    loved: bool
+    love_note: str | None
+    loved_at: datetime | None
+    surprised: bool
+    surprise_note: str | None
+    surprised_at: datetime | None
     created_at: datetime
 
 class SidequestRead(BaseModel):
@@ -391,6 +428,12 @@ class InterestUpdate(BaseModel):
     interested: bool
     note: str | None = Field(default=None, max_length=2000)
 
+
+class DiscoveryFeedbackUpdate(BaseModel):
+    signal: Literal["love", "surprise"]
+    active: bool
+    note: str | None = Field(default=None, max_length=2000)
+
 def normalize_url(value: str | None) -> str | None:
     if value is None or not value.strip():
         return None
@@ -408,11 +451,11 @@ def migrate_additive_columns(target_engine=engine, database_url: str = DATABASE_
         return
     additions = {
         "curiosity_items": {"creator": "VARCHAR(300)", "release_year": "INTEGER"},
-        "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "relationship_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "superseded_at": "DATETIME"},
+        "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "relationship_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME", "superseded_at": "DATETIME"},
         "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'"},
         "concept_sources": {"support_kind": "VARCHAR(20) NOT NULL DEFAULT 'relationship'"},
         "canonical_concepts": {"aliases_json": "TEXT NOT NULL DEFAULT '[]'", "label_kind": "VARCHAR(30) NOT NULL DEFAULT 'established_term'"},
-        "concept_lead_audits": {"stage": "VARCHAR(30) NOT NULL DEFAULT 'concept_candidate'", "discovery_origin": "VARCHAR(30)", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "research_path": "TEXT", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "candidate_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "validation_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "automated_evidence_status": "VARCHAR(30) NOT NULL DEFAULT 'unverified'", "human_review_status": "VARCHAR(20) NOT NULL DEFAULT 'pending'", "human_review_note": "TEXT", "review_history_json": "TEXT NOT NULL DEFAULT '[]'", "kept_concept_id": "INTEGER", "last_evaluated_at": "DATETIME", "evidence_review_detail": "TEXT", "superseded_at": "DATETIME", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME"},
+        "concept_lead_audits": {"stage": "VARCHAR(30) NOT NULL DEFAULT 'concept_candidate'", "discovery_origin": "VARCHAR(30)", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "research_path": "TEXT", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "candidate_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "validation_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "automated_evidence_status": "VARCHAR(30) NOT NULL DEFAULT 'unverified'", "human_review_status": "VARCHAR(20) NOT NULL DEFAULT 'pending'", "human_review_note": "TEXT", "review_history_json": "TEXT NOT NULL DEFAULT '[]'", "kept_concept_id": "INTEGER", "last_evaluated_at": "DATETIME", "evidence_review_detail": "TEXT", "superseded_at": "DATETIME", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME"},
         "item_enrichments": {"identity_status": "VARCHAR(30) NOT NULL DEFAULT 'unresolved'", "identity_key": "VARCHAR(300)", "resolved_media_type": "VARCHAR(40)", "identity_confidence": "FLOAT", "identity_candidates_json": "TEXT NOT NULL DEFAULT '[]'", "identity_source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "confirmed_at": "DATETIME"},
         "research_sources": {"superseded_at": "DATETIME"},
     }
@@ -491,7 +534,11 @@ def concept_read(concept: ItemConcept, db: Session) -> ConceptRead:
         recovery_attempt=json.loads(concept.recovery_attempt_json or "{}"), final_validation_outcome=concept.final_validation_outcome,
         review_audit_id=concept.review_audit_id, user_note=concept.user_note,
         concept_classification=concept.concept_classification, evidence_form=concept.evidence_form,
+        feedback_key=concept.feedback_key, discovery_mode=concept.discovery_mode,
+        discovery_quality=json.loads(concept.discovery_quality_json or "{}"),
         interested=concept.interested, interest_note=concept.interest_note, interested_at=concept.interested_at,
+        loved=concept.loved, love_note=concept.love_note, loved_at=concept.loved_at,
+        surprised=concept.surprised, surprise_note=concept.surprise_note, surprised_at=concept.surprised_at,
     )
 
 def rejected_finding_read(lead: ConceptLeadAudit, db: Session) -> RejectedFindingRead:
@@ -517,7 +564,11 @@ def rejected_finding_read(lead: ConceptLeadAudit, db: Session) -> RejectedFindin
         last_evaluated_at=lead.last_evaluated_at, candidate=json.loads(lead.candidate_snapshot_json or "{}"), validation=json.loads(lead.validation_snapshot_json or "{}"),
         sources=sources, superseded_at=lead.superseded_at, created_at=lead.created_at,
         concept_classification=lead.concept_classification, evidence_form=lead.evidence_form,
+        feedback_key=lead.feedback_key, discovery_mode=lead.discovery_mode,
+        discovery_quality=json.loads(lead.discovery_quality_json or "{}"),
         interested=lead.interested, interest_note=lead.interest_note, interested_at=lead.interested_at,
+        loved=lead.loved, love_note=lead.love_note, loved_at=lead.loved_at,
+        surprised=lead.surprised, surprise_note=lead.surprise_note, surprised_at=lead.surprised_at,
     )
 
 def enrichment_read(item_id: int, db: Session) -> EnrichmentRead:
@@ -604,29 +655,113 @@ def retire_stale_identity_research(item_id: int, db: Session) -> None:
         audit.superseded_at = now
 
 
-def interest_state_for_name(item_id: int, name: str, db: Session) -> tuple[bool, str | None, datetime | None]:
-    """Carry an explicit interest signal across regenerated rows with the same concept label."""
+def concept_feedback_key(name: str, classification: str | None = None) -> str:
+    material = f"concept|{classification or 'legacy'}|{normalize_concept_term(name)}"
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def anchor_feedback_key(anchor) -> str:
+    # Exact normalized anchor substance is deliberately conservative: a similar
+    # title alone can never transfer personal feedback to a different finding.
+    material = "|".join((
+        "anchor", anchor.anchor_kind, normalize_concept_term(anchor.concrete_description),
+        normalize_concept_term(anchor.work_situation), normalize_concept_term(anchor.interesting_reason),
+    ))
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def feedback_state(item_id: int, feedback_key: str, name: str, db: Session) -> dict[str, object]:
+    """Carry feedback only across an exact fingerprint, with exact-name fallback for legacy rows."""
     normalized = normalize_concept_term(name)
     concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id)).all()
     audits = db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id)).all()
-    matches = [entry for entry in [*concepts, *audits] if normalize_concept_term(entry.name) == normalized]
-    interested = [entry for entry in matches if entry.interested]
-    if not interested:
-        return False, None, None
-    latest = max(interested, key=lambda entry: entry.interested_at or entry.created_at)
-    return True, latest.interest_note, latest.interested_at
+    entries = [*concepts, *audits]
+    matches = [entry for entry in entries if entry.feedback_key == feedback_key]
+    if not matches:
+        # Legacy fallback is limited to earlier generated findings. A manually
+        # authored concept with the same label is not evidence that the user
+        # meant to endorse a newly generated observation.
+        matches = [
+            entry for entry in entries
+            if entry.feedback_key is None
+            and normalize_concept_term(entry.name) == normalized
+            and (isinstance(entry, ConceptLeadAudit) or entry.origin != ConceptOrigin.user.value)
+        ]
+
+    def latest_active(attribute: str, timestamp: str, note: str) -> tuple[bool, str | None, datetime | None]:
+        active = [entry for entry in matches if getattr(entry, attribute)]
+        if not active:
+            return False, None, None
+        latest = max(active, key=lambda entry: getattr(entry, timestamp) or entry.created_at)
+        return True, getattr(latest, note), getattr(latest, timestamp)
+
+    interested, interest_note, interested_at = latest_active("interested", "interested_at", "interest_note")
+    loved, love_note, loved_at = latest_active("loved", "loved_at", "love_note")
+    surprised, surprise_note, surprised_at = latest_active("surprised", "surprised_at", "surprise_note")
+    return {
+        "feedback_key": feedback_key,
+        "interested": interested, "interest_note": interest_note, "interested_at": interested_at,
+        "loved": loved, "love_note": love_note, "loved_at": loved_at,
+        "surprised": surprised, "surprise_note": surprise_note, "surprised_at": surprised_at,
+    }
 
 
-def synchronize_interest(item_id: int, name: str, interested: bool, note: str | None, at: datetime | None, db: Session) -> None:
-    """Keep historical and current representations from reviving a reversed signal."""
+def feedback_matches(item_id: int, feedback_key: str | None, name: str, db: Session) -> list[ItemConcept | ConceptLeadAudit]:
     normalized = normalize_concept_term(name)
     concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id)).all()
     audits = db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id)).all()
-    for entry in [*concepts, *audits]:
-        if normalize_concept_term(entry.name) == normalized:
-            entry.interested = interested
-            entry.interest_note = note if interested else None
-            entry.interested_at = at if interested else None
+    entries = [*concepts, *audits]
+    if feedback_key:
+        keyed = [entry for entry in entries if entry.feedback_key == feedback_key]
+        if keyed:
+            return keyed
+    return [entry for entry in entries if entry.feedback_key is None and normalize_concept_term(entry.name) == normalized]
+
+
+def synchronize_feedback(item_id: int, feedback_key: str | None, name: str, signal: str, active: bool, note: str | None, at: datetime | None, db: Session) -> None:
+    fields = {
+        "interest": ("interested", "interest_note", "interested_at"),
+        "love": ("loved", "love_note", "loved_at"),
+        "surprise": ("surprised", "surprise_note", "surprised_at"),
+    }
+    active_field, note_field, time_field = fields[signal]
+    for entry in feedback_matches(item_id, feedback_key, name, db):
+        setattr(entry, active_field, active)
+        setattr(entry, note_field, note if active else None)
+        setattr(entry, time_field, at if active else None)
+
+
+def discovery_limits() -> tuple[int, int]:
+    selected = max(3, min(int(os.getenv("DISCOVERY_MAX_ANCHORS", "5")), 5))
+    researched = max(0, min(int(os.getenv("DISCOVERY_MAX_RESEARCH_ANCHORS", "3")), selected))
+    return selected, researched
+
+
+def select_diverse_anchors(problems) -> tuple[list[object], list[object]]:
+    """Select strong anchors without another model call; keep the factors inspectable."""
+    selected_limit, research_limit = discovery_limits()
+    quality_order = {"high": 2, "medium": 1, "low": 0}
+
+    def factors(anchor) -> tuple[int, int, int, int, int]:
+        quality = anchor.discovery_quality
+        return (
+            quality_order[quality.specificity], quality_order[quality.intellectual_substance],
+            quality_order[quality.surprise_potential], len(anchor.evidence_source_ids),
+            len(anchor.interesting_reason.strip()),
+        )
+
+    ranked = sorted(problems, key=factors, reverse=True)
+    selected: list[object] = []
+    used_kinds: set[str] = set()
+    used_modes: set[str] = set()
+    while ranked and len(selected) < selected_limit:
+        candidate = max(ranked, key=lambda anchor: (anchor.anchor_kind not in used_kinds, anchor.discovery_mode not in used_modes, factors(anchor)))
+        ranked.remove(candidate)
+        selected.append(candidate)
+        used_kinds.add(candidate.anchor_kind)
+        used_modes.add(candidate.discovery_mode)
+    researchable = [anchor for anchor in selected if anchor.external_research_warranted][:research_limit]
+    return selected, researchable
 
 
 def evidence_recovery_limit() -> int:
@@ -761,8 +896,11 @@ def review_rejected_finding(finding_id: int, data: ReviewDecision, db: Session =
                 recovery_attempt_json=lead.recovery_attempt_json or "{}", final_validation_outcome=lead.final_validation_outcome or lead.rejection_reason,
                 review_audit_id=lead.id, user_note=data.note,
                 concept_classification=lead.concept_classification or "speculative_connection",
-                evidence_form=lead.evidence_form,
+                evidence_form=lead.evidence_form, feedback_key=lead.feedback_key,
+                discovery_mode=lead.discovery_mode, discovery_quality_json=lead.discovery_quality_json or "{}",
                 interested=lead.interested, interest_note=lead.interest_note, interested_at=lead.interested_at,
+                loved=lead.loved, love_note=lead.love_note, loved_at=lead.loved_at,
+                surprised=lead.surprised, surprise_note=lead.surprise_note, surprised_at=lead.surprised_at,
             )
             db.add(existing)
             db.flush()
@@ -787,7 +925,7 @@ def update_concept_interest(concept_id: int, data: InterestUpdate, db: Session =
     if concept is None:
         raise HTTPException(404, "Concept not found")
     at = datetime.now(timezone.utc) if data.interested else None
-    synchronize_interest(concept.item_id, concept.name, data.interested, data.note, at, db)
+    synchronize_feedback(concept.item_id, concept.feedback_key, concept.name, "interest", data.interested, data.note, at, db)
     db.commit()
     db.refresh(concept)
     return concept_read(concept, db)
@@ -799,7 +937,31 @@ def update_finding_interest(finding_id: int, data: InterestUpdate, db: Session =
     if lead is None or lead.accepted:
         raise HTTPException(404, "Rejected finding not found")
     at = datetime.now(timezone.utc) if data.interested else None
-    synchronize_interest(lead.item_id, lead.name, data.interested, data.note, at, db)
+    synchronize_feedback(lead.item_id, lead.feedback_key, lead.name, "interest", data.interested, data.note, at, db)
+    db.commit()
+    db.refresh(lead)
+    return rejected_finding_read(lead, db)
+
+
+@app.patch("/api/concepts/{concept_id}/feedback", response_model=ConceptRead)
+def update_concept_feedback(concept_id: int, data: DiscoveryFeedbackUpdate, db: Session = Depends(get_db)):
+    concept = db.get(ItemConcept, concept_id)
+    if concept is None:
+        raise HTTPException(404, "Concept not found")
+    at = datetime.now(timezone.utc) if data.active else None
+    synchronize_feedback(concept.item_id, concept.feedback_key, concept.name, data.signal, data.active, data.note, at, db)
+    db.commit()
+    db.refresh(concept)
+    return concept_read(concept, db)
+
+
+@app.patch("/api/rejected-findings/{finding_id}/feedback", response_model=RejectedFindingRead)
+def update_finding_feedback(finding_id: int, data: DiscoveryFeedbackUpdate, db: Session = Depends(get_db)):
+    lead = db.get(ConceptLeadAudit, finding_id)
+    if lead is None or lead.accepted:
+        raise HTTPException(404, "Rejected finding not found")
+    at = datetime.now(timezone.utc) if data.active else None
+    synchronize_feedback(lead.item_id, lead.feedback_key, lead.name, data.signal, data.active, data.note, at, db)
     db.commit()
     db.refresh(lead)
     return rejected_finding_read(lead, db)
@@ -852,8 +1014,9 @@ def extract_concepts(item_id: int, db: Session = Depends(get_db), ai: OpenRouter
     for previous in db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai", ItemConcept.superseded_at.is_(None))).all():
         previous.superseded_at = now
     for extracted in extraction.concepts:
-        interested, interest_note, interested_at = interest_state_for_name(item_id, extracted.name, db)
-        db.add(ItemConcept(item_id=item_id, name=extracted.name.strip(), category=extracted.category, origin="ai", explanation=extracted.explanation, interested=interested, interest_note=interest_note, interested_at=interested_at))
+        key = concept_feedback_key(extracted.name, "quick_extraction")
+        feedback = feedback_state(item_id, key, extracted.name, db)
+        db.add(ItemConcept(item_id=item_id, name=extracted.name.strip(), category=extracted.category, origin="ai", explanation=extracted.explanation, **feedback))
     db.commit()
     return db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.created_at, ItemConcept.id)).all()
 
@@ -988,24 +1151,43 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
         reason = understanding.identity_mismatch_reason or understanding.confirmation_question or "The retrieved sources do not match the confirmed work identity."
         raise HTTPException(502, f"{reason} Existing research was preserved; correct or resolve the identity before retrying.")
 
+    selected_anchors = []
+    research_anchors = []
+    all_concept_sources = []
+    concept_source_payloads: list[dict[str, str]] = []
+    concept_source_urls: dict[str, str] = {}
+    concept_source_text: dict[str, str] = {}
+    candidates = EvidenceConceptBatch(candidates=[], insufficient_evidence_reasons=[])
+    validation = ConceptValidationBatch(results=[])
+    recovery_attempts: dict[str, dict[str, object]] = {}
+    initial_evidence_outcomes: dict[str, str] = {}
+    recovery_source_urls: set[str] = set()
+    external_research_error: str | None = None
     try:
-        problems = ai.identify_research_problems(understanding, work_source_payloads)
+        proposed_anchors = ai.identify_research_problems(understanding, work_source_payloads)
         work_source_ids = set(work_source_urls)
-        problem_ids = [problem.problem_id for problem in problems.problems]
+        problem_ids = [problem.problem_id for problem in proposed_anchors.problems]
         if len(problem_ids) != len(set(problem_ids)):
-            raise AIProviderError("Research problem generation returned duplicate identifiers. Existing research was preserved.")
-        if problem_reason := next((reason for problem in problems.problems if (reason := research_problem_rejection(problem, work_source_ids, item.title))), None):
-            raise AIProviderError(f"Research problem validation failed: {problem_reason} Existing research was preserved.")
-        concept_packet = research.research_problems(payload, [problem.model_dump() for problem in problems.problems])
+            raise AIProviderError("Work-anchor generation returned duplicate identifiers. Existing research was preserved.")
+        if problem_reason := next((reason for problem in proposed_anchors.problems if (reason := research_problem_rejection(problem, work_source_ids, item.title))), None):
+            raise AIProviderError(f"Work-anchor validation failed: {problem_reason} Existing research was preserved.")
+        selected_anchors, research_anchors = select_diverse_anchors(proposed_anchors.problems)
+        # The internal research subset may intentionally be empty: grounded
+        # observations do not need external research to be worth preserving.
+        problems = ResearchProblemBatch.model_construct(problems=research_anchors)
+    except (AIConfigurationError, AIProviderError) as exc:
+        raise ai_http_error(exc) from exc
+
+    try:
+        if not research_anchors:
+            raise StopIteration
+        concept_packet = research.research_problems(payload, [problem.model_dump() for problem in research_anchors])
         all_concept_sources = list(concept_packet.sources)
         concept_source_payloads = [{"source_id": f"concept-{index}", "title": source.title, "excerpt": source.excerpt[:2200]} for index, source in enumerate(all_concept_sources, 1)]
         concept_source_urls = {source_payload["source_id"]: source.url for source_payload, source in zip(concept_source_payloads, all_concept_sources)}
         concept_source_text = {source_payload["source_id"]: f"{source.title} {source.excerpt}" for source_payload, source in zip(concept_source_payloads, all_concept_sources)}
         candidates = ai.extract_evidence_concepts(problems, concept_packet.synthesis, concept_source_payloads)
-        recovery_attempts: dict[str, dict[str, object]] = {}
-        initial_evidence_outcomes: dict[str, str] = {}
         recovered_candidates = []
-        recovery_source_urls: set[str] = set()
         targeted_attempts = 0
         recovery_limit = evidence_recovery_limit()
         for candidate in candidates.candidates:
@@ -1051,8 +1233,16 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             recovered_candidates.append(candidate)
         candidates = candidates.model_copy(update={"candidates": recovered_candidates})
         validation = ai.validate_concepts(understanding, problems, candidates, work_source_payloads, concept_source_payloads)
+    except StopIteration:
+        pass
     except (AIConfigurationError, AIProviderError) as exc:
-        raise ai_http_error(exc) from exc
+        external_research_error = str(exc)
+        all_concept_sources = []
+        concept_source_payloads = []
+        concept_source_urls = {}
+        concept_source_text = {}
+        candidates = EvidenceConceptBatch(candidates=[], insufficient_evidence_reasons=[f"External concept research was unavailable: {exc}"])
+        validation = ConceptValidationBatch(results=[])
 
     retire_stale_identity_research(item_id, db)
     unique_sources = {source.url: (source, "work") for source in packet.sources if source.url}
@@ -1089,15 +1279,63 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
     enrichment.researched_at = datetime.now(timezone.utc)
     db.add(enrichment)
     work_source_ids = set(work_source_urls)
+    work_payload_by_id = {source["source_id"]: source for source in work_source_payloads}
+    seen_observations: set[str] = set()
+    for anchor in selected_anchors:
+        label = (anchor.concise_label or anchor.intellectual_question).strip()[:120]
+        key = anchor_feedback_key(anchor)
+        if key in seen_observations:
+            continue
+        seen_observations.add(key)
+        feedback = feedback_state(item_id, key, label, db)
+        quality_json = json.dumps(anchor.discovery_quality.model_dump())
+        evidence_snapshots = [
+            {**work_payload_by_id[source_id], "url": work_source_urls.get(source_id, ""), "source_type": "work"}
+            for source_id in anchor.evidence_source_ids if source_id in work_payload_by_id
+        ]
+        audit = ConceptLeadAudit(
+            item_id=item_id, name=label, proposed_definition=anchor.concrete_description,
+            motivating_detail=anchor.work_situation, proposed_relationship=anchor.interesting_reason,
+            relationship_type="explicit", research_questions_json=json.dumps(anchor.research_queries),
+            accepted=True, stage="work_anchor", discovery_origin="work_grounded",
+            discovery_source_ids_json=json.dumps(anchor.evidence_source_ids), research_path=anchor.distinctiveness,
+            initial_validation_outcome="Work-source evidence and anchor specificity passed deterministic checks.",
+            final_validation_outcome=external_research_error or "Grounded observation accepted independently of external concept research.",
+            candidate_snapshot_json=json.dumps(anchor.model_dump()), validation_snapshot_json="{}",
+            source_snapshot_json=json.dumps(evidence_snapshots), automated_evidence_status="partially_supported",
+            evidence_review_detail="The observation is supported by work-specific evidence; no claim of established external terminology is made.",
+            concept_classification="grounded_observation", evidence_form="paraphrase",
+            discovery_mode=anchor.discovery_mode, discovery_quality_json=quality_json, **feedback,
+        )
+        db.add(audit)
+        db.flush()
+        observation = ItemConcept(
+            item_id=item_id, name=label, canonical_name=label, category="mechanism", origin="ai",
+            explanation=anchor.concrete_description, definition=anchor.concrete_description,
+            domain=anchor.anchor_kind.replace("_", " "), mechanism=anchor.interesting_reason,
+            level="mechanism", relationship=anchor.work_situation, relationship_type="explicit",
+            relationship_evidence=anchor.work_situation, evidence_status="work_supported",
+            concept_verification="work_supported", relationship_verification="verified",
+            label_kind="descriptive_label", curiosity_hook=anchor.intellectual_question,
+            discovery_origin="work_grounded", research_path=anchor.distinctiveness,
+            discovery_source_ids_json=json.dumps(anchor.evidence_source_ids),
+            initial_validation_outcome="Work-source evidence and anchor specificity passed deterministic checks.",
+            final_validation_outcome="Grounded observation accepted independently of external concept research.",
+            review_audit_id=audit.id, concept_classification="grounded_observation", evidence_form="paraphrase",
+            discovery_mode=anchor.discovery_mode, discovery_quality_json=quality_json, **feedback,
+        )
+        db.add(observation)
+        db.flush()
+        for source_id in anchor.evidence_source_ids:
+            url = work_source_urls.get(source_id)
+            if url and url in saved_sources:
+                db.add(ConceptSource(concept_id=observation.id, source_id=saved_sources[url].id, support_kind="observation"))
     for result in validation.results:
         if result.accepted and (quality_reason := concept_quality_rejection(result, work_source_ids, concept_source_text, concept_source_urls, item.title)):
             result.accepted = False
             result.rejection_reason = quality_reason
     results_by_candidate = {result.candidate_id: result for result in validation.results}
-    candidates_by_problem = {problem.problem_id: [] for problem in problems.problems}
     for candidate in candidates.candidates:
-        for problem_id in candidate.problem_ids:
-            candidates_by_problem.setdefault(problem_id, []).append(candidate)
         result = results_by_candidate.get(candidate.candidate_id)
         motivating_detail = "\n".join(reference.excerpt for reference in candidate.concept_evidence)
         final_outcome = "Accepted after final validation." if result and result.accepted else (result.rejection_reason if result else "Relationship validation returned no result.")
@@ -1106,12 +1344,9 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
         source_url_by_id = {**work_source_urls, **concept_source_urls}
         source_snapshots = [{**source_payload_by_id[source_id], "url": source_url_by_id.get(source_id, ""), "source_type": "work" if source_id in work_source_ids else "independent"} for source_id in referenced_ids if source_id in source_payload_by_id]
         evidence_issue = candidate_evidence_rejection(candidate, concept_source_text, concept_source_urls)
-        interested, interest_note, interested_at = interest_state_for_name(item_id, candidate.canonical_name, db)
-        db.add(ConceptLeadAudit(item_id=item_id, name=candidate.canonical_name, proposed_definition=candidate.definition, motivating_detail=motivating_detail, proposed_relationship=result.relationship_evidence if result else candidate.research_path, relationship_type=result.relationship_type if result else "unsupported", research_questions_json=json.dumps(candidate.problem_ids), accepted=bool(result and result.accepted), rejection_reason=None if result and result.accepted else final_outcome, stage="concept_candidate", discovery_origin=candidate.discovery_origin, discovery_source_ids_json=json.dumps(candidate.discovery_source_ids), research_path=candidate.research_path, initial_validation_outcome=initial_evidence_outcomes.get(candidate.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(candidate.candidate_id, {})), final_validation_outcome=final_outcome, candidate_snapshot_json=json.dumps(candidate.model_dump()), validation_snapshot_json=json.dumps(result.model_dump()) if result else "{}", source_snapshot_json=json.dumps(source_snapshots), automated_evidence_status="partially_supported" if evidence_issue is None else "unverified", evidence_review_detail=evidence_issue or "Independent concept evidence passed deterministic checks; the final automated outcome is preserved separately.", concept_classification=candidate.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in candidate.concept_evidence) else "quotation", interested=interested, interest_note=interest_note, interested_at=interested_at))
-    for problem in problems.problems:
-        has_candidates = bool(candidates_by_problem.get(problem.problem_id))
-        reason = None if has_candidates else next(iter(candidates.insufficient_evidence_reasons), "Independent research did not yield a source-grounded canonical concept for this problem.")
-        db.add(ConceptLeadAudit(item_id=item_id, name=problem.intellectual_question, proposed_definition=problem.concrete_description, motivating_detail=problem.work_situation, proposed_relationship=", ".join(problem.relevant_domains), relationship_type="unsupported", research_questions_json=json.dumps(problem.research_queries), accepted=has_candidates, rejection_reason=None if has_candidates else f"Insufficient evidence: {reason}", stage="research_problem"))
+        key = concept_feedback_key(candidate.canonical_name, candidate.concept_classification)
+        feedback = feedback_state(item_id, key, candidate.canonical_name, db)
+        db.add(ConceptLeadAudit(item_id=item_id, name=candidate.canonical_name, proposed_definition=candidate.definition, motivating_detail=motivating_detail, proposed_relationship=result.relationship_evidence if result else candidate.research_path, relationship_type=result.relationship_type if result else "unsupported", research_questions_json=json.dumps(candidate.problem_ids), accepted=bool(result and result.accepted), rejection_reason=None if result and result.accepted else final_outcome, stage="concept_candidate", discovery_origin=candidate.discovery_origin, discovery_source_ids_json=json.dumps(candidate.discovery_source_ids), research_path=candidate.research_path, initial_validation_outcome=initial_evidence_outcomes.get(candidate.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(candidate.candidate_id, {})), final_validation_outcome=final_outcome, candidate_snapshot_json=json.dumps(candidate.model_dump()), validation_snapshot_json=json.dumps(result.model_dump()) if result else "{}", source_snapshot_json=json.dumps(source_snapshots), automated_evidence_status="partially_supported" if evidence_issue is None else "unverified", evidence_review_detail=evidence_issue or "Independent concept evidence passed deterministic checks; the final automated outcome is preserved separately.", concept_classification=candidate.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in candidate.concept_evidence) else "quotation", **feedback))
     if not understanding.ambiguous_identity:
         seen_concepts: set[str] = set()
         for extracted in validation.results:
@@ -1122,8 +1357,9 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
                 continue
             seen_concepts.add(normalized_name)
             canonical = resolve_canonical_concept(db, extracted.canonical_name, extracted.aliases, extracted.definition, extracted.domain, extracted.mechanism, extracted.concept_verification, extracted.label_kind) if extracted.concept_classification == "established_concept" else None
-            interested, interest_note, interested_at = interest_state_for_name(item_id, extracted.canonical_name, db)
-            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id if canonical else None, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.", concept_classification=extracted.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in extracted.concept_evidence) else "quotation", interested=interested, interest_note=interest_note, interested_at=interested_at)
+            key = concept_feedback_key(extracted.canonical_name, extracted.concept_classification)
+            feedback = feedback_state(item_id, key, extracted.canonical_name, db)
+            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id if canonical else None, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.", concept_classification=extracted.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in extracted.concept_evidence) else "quotation", **feedback)
             db.add(concept)
             db.flush()
             support_by_url: dict[str, set[str]] = {}
@@ -1165,31 +1401,51 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         for name in json.loads(saved_concepts or "[]"):
             previous_terms.add(normalize_concept_term(str(name)))
 
-    def pair_score(pair: tuple[CuriosityItem, CuriosityItem]) -> tuple[float, int, int]:
+    def pair_factors(pair: tuple[CuriosityItem, CuriosityItem]) -> dict[str, int]:
         item_a, item_b = pair
         a_concepts, b_concepts = by_item[item_a.id], by_item[item_b.id]
-        interest = sum(1 for concept in [*a_concepts, *b_concepts] if concept.interested)
-        mechanisms = sum(1 for concept in [*a_concepts, *b_concepts] if concept.level == "mechanism" or concept.category == "mechanism")
-        established = sum(1 for concept in [*a_concepts, *b_concepts] if concept.concept_classification in {"established_concept", "grounded_interpretation"})
+        combined = [*a_concepts, *b_concepts]
         a_terms = {normalize_concept_term(concept.name) for concept in a_concepts}
         b_terms = {normalize_concept_term(concept.name) for concept in b_concepts}
-        overlap_penalty = len(a_terms & b_terms) * 2
-        repetition_penalty = sum(1 for term in a_terms | b_terms if term in previous_terms)
-        diversity = 2 if item_a.kind != item_b.kind else 0
-        score = interest * 8 + mechanisms * 2 + established + diversity - overlap_penalty - repetition_penalty
+        return {
+            "interest": sum(1 for concept in combined if concept.interested),
+            "love": sum(1 for concept in combined if concept.loved),
+            "surprise": min(1, sum(1 for concept in combined if concept.surprised)),
+            "mechanisms": sum(1 for concept in combined if concept.level == "mechanism" or concept.category == "mechanism"),
+            "grounded_discoveries": sum(1 for concept in combined if concept.concept_classification in {"established_concept", "grounded_interpretation", "grounded_observation"}),
+            "media_diversity": 1 if item_a.kind != item_b.kind else 0,
+            "overlap_penalty": len(a_terms & b_terms),
+            "repetition_penalty": sum(1 for term in a_terms | b_terms if term in previous_terms),
+        }
+
+    def pair_score(pair: tuple[CuriosityItem, CuriosityItem]) -> tuple[int, int, int]:
+        factors = pair_factors(pair)
+        # Personal feedback raises relevance but is deliberately capped by small
+        # weights; mechanism, grounding, diversity, and repetition remain visible.
+        score = (
+            factors["interest"] * 4 + factors["love"] * 6 + factors["surprise"] * 2
+            + factors["mechanisms"] * 2 + factors["grounded_discoveries"]
+            + factors["media_diversity"] * 2 - factors["overlap_penalty"] * 2
+            - factors["repetition_penalty"] * 2
+        )
+        item_a, item_b = pair
         return (score, -item_a.id, -item_b.id)
 
     pairs = sorted(combinations(eligible, 2), key=pair_score, reverse=True)
     if not pairs:
         raise HTTPException(422, "Add concepts to at least two curiosities before asking for a Sidequest.")
+    selected_pairs = pairs[:5]
+    exploration_pair = next((pair for pair in pairs if pair not in selected_pairs and not any((concept.interested or concept.loved or concept.surprised) for item in pair for concept in by_item[item.id])), None)
+    if exploration_pair is not None:
+        selected_pairs.append(exploration_pair)
     pair_payloads = []
     allowed_pairs: set[frozenset[int]] = set()
-    for item_a, item_b in pairs[:6]:
+    for item_a, item_b in selected_pairs:
         allowed_pairs.add(frozenset((item_a.id, item_b.id)))
         def concept_payload(concept: ItemConcept) -> dict[str, object]:
             source_urls = [] if concept.origin == "user_kept" else list(db.scalars(select(ResearchSource.url).join(ConceptSource, ConceptSource.source_id == ResearchSource.id).where(ConceptSource.concept_id == concept.id)).all())
             generic = any(re.search(pattern, concept.name.casefold()) for pattern in (r"\bcoming of age\b", r"\bteam dynamics\b", r"\boppression\b", r"\bmilitary strateg"))
-            return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "human_kept": concept.origin == "user_kept", "interested": concept.interested, "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
+            return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "mechanism": concept.mechanism, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "human_kept": concept.origin == "user_kept", "interested": concept.interested, "loved": concept.loved, "surprised": concept.surprised, "discovery_mode": concept.discovery_mode, "discovery_quality": json.loads(concept.discovery_quality_json or "{}"), "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
         pair_payloads.append({
             "item_a": {"id": item_a.id, "kind": item_a.kind, "title": item_a.title, "note": item_a.note, "concepts": [concept_payload(c) for c in by_item[item_a.id]]},
             "item_b": {"id": item_b.id, "kind": item_b.kind, "title": item_b.title, "note": item_b.note, "concepts": [concept_payload(c) for c in by_item[item_b.id]]},
