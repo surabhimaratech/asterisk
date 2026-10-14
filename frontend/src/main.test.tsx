@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App, ConceptExplorer, RejectedFindingCard } from './main'
 
 afterEach(() => {
+  cleanup()
   vi.restoreAllMocks()
   localStorage.clear()
 })
@@ -16,6 +17,17 @@ describe('media types', () => {
     render(<App />)
     expect((await screen.findAllByRole('button', { name: /TV Series/i })).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: /^🎬 Movie$/i })).toBeInTheDocument()
+  })
+
+  it('offers accessible work scope, progress, and spoiler controls', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    render(<App />)
+
+    fireEvent.click(screen.getByText('Identity, progress & spoilers'))
+    expect(screen.getByLabelText('What does this entry represent?')).toHaveValue('unknown')
+    fireEvent.change(screen.getByLabelText('What does this entry represent?'), { target: { value: 'series' } })
+    expect(screen.getByLabelText('Your progress')).toBeInTheDocument()
+    expect(screen.getByLabelText('Spoiler boundary')).toHaveValue('avoid')
   })
 })
 
@@ -61,7 +73,13 @@ describe('identity disambiguation', () => {
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const item = { id: 3, kind: 'tv_series' as const, title: 'Castle', note: null, url: null, creator: null, release_year: null, created_at: new Date().toISOString() }
+    const item = {
+      id: 3, kind: 'tv_series' as const, title: 'Castle', note: null, url: null,
+      creator: null, release_year: null, work_scope: 'individual' as const,
+      parent_work_title: null, canonical_identity_id: null, progress_status: 'unknown' as const,
+      progress_current: null, progress_total: null, progress_unit: 'installment' as const,
+      spoiler_policy: 'avoid' as const, created_at: new Date().toISOString(),
+    }
     render(<ConceptExplorer item={item} onClose={() => undefined} onError={() => undefined} onChange={() => undefined} />)
     expect(await screen.findByText('Andrew W. Marlowe · 2009 · TV Series')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'This is the one' }))

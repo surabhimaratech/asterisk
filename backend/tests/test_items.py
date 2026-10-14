@@ -119,6 +119,25 @@ def test_update_validation_and_missing_item(client: TestClient) -> None:
     assert client.patch("/api/items/999", json={"title": "Missing"}).status_code == 404
 
 
+def test_work_scope_progress_and_spoiler_preferences_persist_and_validate(client: TestClient) -> None:
+    created = create_item(
+        client, title="The Final Empire", work_scope="installment",
+        parent_work_title="Mistborn", canonical_identity_id="openlibrary:OL123W",
+        progress_status="in_progress", progress_current=2, progress_total=3,
+        progress_unit="book", spoiler_policy="through_progress",
+    )
+
+    assert created.status_code == 201
+    item = created.json()
+    assert item["work_scope"] == "installment"
+    assert item["parent_work_title"] == "Mistborn"
+    assert item["canonical_identity_id"] == "openlibrary:OL123W"
+    assert (item["progress_current"], item["progress_total"], item["progress_unit"]) == (2, 3, "book")
+    assert item["spoiler_policy"] == "through_progress"
+    assert client.patch(f"/api/items/{item['id']}", json={"progress_current": 4}).status_code == 422
+    assert client.post("/api/items", json={"kind": "book", "title": "Too far", "progress_current": 101, "progress_total": 100, "progress_unit": "percent"}).status_code == 422
+
+
 class FakeAI:
     def __init__(self) -> None:
         self.extracted = [ExtractedConcept(name="Emergence", category="mechanism", explanation="Local interactions forming a pattern.")]
@@ -647,6 +666,56 @@ def test_entity_resolution_prefers_exact_tv_series_and_rejects_namesakes(client:
     assert response.json()["creator"] == expected_creator
 
 
+def test_series_scope_cannot_silently_resolve_to_first_installment(client: TestClient) -> None:
+    class FirstInstallmentOnlyAI(FakeAI):
+        def resolve_identity(self, item: dict[str, object], _synthesis: str, sources: list[dict[str, str]]) -> EntityResolution:
+            return EntityResolution(status="confirmed", reason="Title resembles the first novel.", candidates=[EntityCandidate(
+                candidate_id="study-in-scarlet", title="Sherlock Holmes", creator="Arthur Conan Doyle",
+                release_year=1887, media_type="book", work_scope="individual",
+                parent_work_title="Sherlock Holmes", canonical_identity_id="work:first-novel",
+                description="The first Sherlock Holmes novel.", confidence=0.99,
+                source_ids=[sources[0]["source_id"]],
+            )])
+
+    item_id = create_item(client, title="Sherlock Holmes", work_scope="series").json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+    app.dependency_overrides[get_ai_client] = lambda: FirstInstallmentOnlyAI()
+
+    result = client.post(f"/api/items/{item_id}/identity/resolve")
+
+    assert result.status_code == 200
+    assert result.json()["identity_status"] == "ambiguous"
+    assert result.json()["resolved_title"] is None
+    rejected_confirmation = client.post(f"/api/items/{item_id}/identity/confirm", json={"candidate_id": "study-in-scarlet"})
+    assert rejected_confirmation.status_code == 422
+    assert "work scope" in rejected_confirmation.json()["detail"]
+
+
+def test_series_identity_scope_and_provenance_are_persisted(client: TestClient) -> None:
+    class SeriesAI(FakeAI):
+        def resolve_identity(self, item: dict[str, object], _synthesis: str, sources: list[dict[str, str]]) -> EntityResolution:
+            return EntityResolution(status="confirmed", reason="Exact series match.", candidates=[EntityCandidate(
+                candidate_id="sherlock-canon", title="Sherlock Holmes", creator="Arthur Conan Doyle",
+                release_year=1887, media_type="book", work_scope="series",
+                canonical_identity_id="wikidata:Q192837", description="The Sherlock Holmes canon.",
+                confidence=0.99, source_ids=[sources[0]["source_id"]],
+            )])
+
+    item_id = create_item(client, title="Sherlock Holmes", work_scope="series").json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+    app.dependency_overrides[get_ai_client] = lambda: SeriesAI()
+
+    result = client.post(f"/api/items/{item_id}/identity/resolve")
+
+    assert result.status_code == 200
+    body = result.json()
+    assert body["identity_status"] == "confirmed"
+    assert body["resolved_work_scope"] == "series"
+    assert body["canonical_identity_id"] == "wikidata:Q192837"
+    assert body["identity_sources"][0]["source_id"] == "identity-1"
+    assert body["identity_sources"][0]["url"].startswith("https://")
+
+
 @pytest.mark.parametrize(("title", "kind", "expected_labels"), [
     ("Castle", "tv_series", {"Mystery as courtship", "Cases inside a longer arc", "Humor as investigative friction"}),
     ("The Hunger Games", "book", {"Spectacle as political control", "Private care as public resistance", "An arena engineered to narrate power"}),
@@ -708,6 +777,47 @@ def test_anchor_and_research_limits_are_bounded_and_configurable(client: TestCli
     assert response.status_code == 200
     assert len(captured) == 2
     assert len([concept for concept in response.json()["concepts"] if concept["concept_classification"] == "grounded_observation"]) == 4
+
+
+def test_spoiler_boundary_rejects_out_of_scope_observations_without_saving_them(client: TestClient) -> None:
+    captured: list[dict[str, object]] = []
+
+    class CapturingResearch(WorkOnlyResearch):
+        def research(self, item: dict[str, object]) -> ResearchPacket:
+            captured.append(item)
+            return super().research(item)
+
+    class LateSpoilerAI(WorkFirstDiscoveryAI):
+        def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
+            batch = super().identify_research_problems(understanding, work_sources)
+            return batch.model_copy(update={"problems": [batch.problems[0].model_copy(update={"spoiler_scope": "full"})]})
+
+    item_id = create_item(
+        client, title="The Hunger Games", progress_status="in_progress",
+        progress_current=1, progress_total=3, progress_unit="book", spoiler_policy="through_progress",
+    ).json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: LateSpoilerAI()
+    app.dependency_overrides[get_research_provider] = lambda: CapturingResearch()
+
+    response = client.post(f"/api/items/{item_id}/enrich")
+
+    assert response.status_code == 502
+    assert "spoiler boundary" in response.json()["detail"]
+    assert captured[0]["spoiler_ceiling"] == "within_progress"
+    assert captured[0]["progress"] == {"status": "in_progress", "current": 1, "total": 3, "unit": "book"}
+    assert client.get(f"/api/items/{item_id}/concepts").json() == []
+
+
+def test_saved_research_sources_expose_evidence_roles(client: TestClient) -> None:
+    item_id = create_item(client).json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+
+    response = client.post(f"/api/items/{item_id}/enrich")
+
+    assert response.status_code == 200
+    roles = {role for source in response.json()["sources"] for role in source["evidence_roles"]}
+    assert {"work_identity", "work_detail", "external_concept", "concept_relationship"} <= roles
 
 
 def test_love_and_surprise_survive_only_exact_observation_reruns(client: TestClient) -> None:
@@ -884,6 +994,30 @@ def test_identity_change_retires_ai_findings_but_preserves_user_content(client: 
     assert all(finding["superseded_at"] for finding in enrichment["rejected_leads"])
 
 
+def test_progress_change_retires_ai_research_but_preserves_identity_and_user_content(client: TestClient) -> None:
+    item_id = create_item(client, progress_status="planned", spoiler_policy="avoid").json()["id"]
+    manual_id = client.post(f"/api/items/{item_id}/concepts", json={"name": "My own question", "category": "personal"}).json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    researched = client.post(f"/api/items/{item_id}/enrich")
+    assert researched.status_code == 200
+    identity_key = researched.json()["identity_key"]
+    assert identity_key
+
+    changed = client.patch(f"/api/items/{item_id}", json={
+        "progress_status": "in_progress", "progress_current": 1,
+        "progress_total": 3, "progress_unit": "book", "spoiler_policy": "through_progress",
+    })
+
+    assert changed.status_code == 200
+    concepts = client.get(f"/api/items/{item_id}/concepts").json()
+    assert [concept["id"] for concept in concepts] == [manual_id]
+    enrichment = client.get(f"/api/items/{item_id}/enrichment").json()
+    assert enrichment["status"] == "not_researched"
+    assert enrichment["identity_status"] == "confirmed"
+    assert enrichment["identity_key"] == identity_key
+
+
 def test_identity_reset_retires_user_kept_findings_from_current_discovery(client: TestClient) -> None:
     item_id, finding_id = rejected_finding(client)
     kept = client.patch(f"/api/rejected-findings/{finding_id}/review", json={"decision": "keep"}).json()
@@ -927,8 +1061,12 @@ def test_additive_migration_preserves_ids_and_only_recategorizes_known_tv_titles
     with migration_engine.begin() as connection:
         rows = connection.exec_driver_sql("SELECT id, kind, title FROM curiosity_items ORDER BY id").fetchall()
         preserved = connection.exec_driver_sql("SELECT (SELECT count(*) FROM item_concepts WHERE id = 10 AND superseded_at IS NOT NULL), (SELECT count(*) FROM research_sources WHERE id = 20 AND superseded_at IS NOT NULL), (SELECT count(*) FROM concept_lead_audits WHERE id = 30 AND superseded_at IS NOT NULL), (SELECT status FROM item_enrichments WHERE item_id = 1), (SELECT loved FROM item_concepts WHERE id = 10), (SELECT surprised FROM item_concepts WHERE id = 10)").fetchone()
+        p0_defaults = connection.exec_driver_sql("SELECT work_scope, progress_status, progress_unit, spoiler_policy FROM curiosity_items WHERE id = 2").fetchone()
+        p0_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(curiosity_items)").fetchall()}
     assert rows == [(1, "tv_series", "Castle"), (2, "movie", "An Ambiguous Title"), (3, "tv_series", "Game of Thrones")]
     assert preserved == (1, 1, 1, "needs_confirmation", 0, 0)
+    assert p0_defaults == ("unknown", "unknown", "installment", "avoid")
+    assert {"work_scope", "parent_work_title", "canonical_identity_id", "progress_status", "progress_current", "progress_total", "progress_unit", "spoiler_policy"} <= p0_columns
 
     with migration_engine.begin() as connection:
         connection.exec_driver_sql("INSERT INTO curiosity_items (id, kind, title) VALUES (4, 'movie', 'Castle')")

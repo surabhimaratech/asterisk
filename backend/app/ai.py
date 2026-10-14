@@ -62,6 +62,9 @@ class EntityCandidate(BaseModel):
     creator: str = Field(max_length=300)
     release_year: int | None = Field(default=None, ge=1000, le=3000)
     media_type: Literal["book", "movie", "tv_series", "podcast", "article"]
+    work_scope: Literal["unknown", "individual", "series", "collection", "installment", "adaptation"] = "unknown"
+    parent_work_title: str = Field(default="", max_length=300)
+    canonical_identity_id: str = Field(default="", max_length=300)
     description: str = Field(min_length=1, max_length=900)
     confidence: float = Field(ge=0, le=1)
     source_ids: list[str] = Field(min_length=1, max_length=5)
@@ -114,6 +117,7 @@ class WorkUnderstanding(BaseModel):
     worldbuilding_rules_and_constraints: list[str] = Field(default_factory=list, max_length=8)
     narrative_structures_and_techniques: list[str] = Field(default_factory=list, max_length=8)
     tone_humor_and_motifs: list[str] = Field(default_factory=list, max_length=8)
+    spoiler_ceiling: Literal["premise_only", "within_progress", "full"] = "premise_only"
 
 
 class DiscoveryQuality(BaseModel):
@@ -142,6 +146,7 @@ class ResearchProblem(BaseModel):
     discovery_mode: Literal["deepen_fascination", "reveal_overlooked_perspective"] = "deepen_fascination"
     external_research_warranted: bool = True
     discovery_quality: DiscoveryQuality = Field(default_factory=DiscoveryQuality)
+    spoiler_scope: Literal["premise_only", "within_progress", "full"] = "premise_only"
 
 
 class ResearchProblemBatch(BaseModel):

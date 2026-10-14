@@ -47,6 +47,40 @@ class Kind(str, Enum):
     question = "question"
     thought = "thought"
 
+
+class WorkScope(str, Enum):
+    unknown = "unknown"
+    individual = "individual"
+    series = "series"
+    collection = "collection"
+    installment = "installment"
+    adaptation = "adaptation"
+
+
+class ProgressStatus(str, Enum):
+    unknown = "unknown"
+    planned = "planned"
+    in_progress = "in_progress"
+    paused = "paused"
+    finished = "finished"
+    abandoned = "abandoned"
+    rereading = "rereading"
+    rewatching = "rewatching"
+
+
+class ProgressUnit(str, Enum):
+    installment = "installment"
+    book = "book"
+    season = "season"
+    episode = "episode"
+    percent = "percent"
+
+
+class SpoilerPolicy(str, Enum):
+    avoid = "avoid"
+    through_progress = "through_progress"
+    full = "full"
+
 class CuriosityItem(Base):
     __tablename__ = "curiosity_items"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -56,6 +90,14 @@ class CuriosityItem(Base):
     url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     creator: Mapped[str | None] = mapped_column(String(300), nullable=True)
     release_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    work_scope: Mapped[str] = mapped_column(String(30), default=WorkScope.unknown.value)
+    parent_work_title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    canonical_identity_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    progress_status: Mapped[str] = mapped_column(String(30), default=ProgressStatus.unknown.value)
+    progress_current: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    progress_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    progress_unit: Mapped[str] = mapped_column(String(30), default=ProgressUnit.installment.value)
+    spoiler_policy: Mapped[str] = mapped_column(String(30), default=SpoilerPolicy.avoid.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class CanonicalConcept(Base):
@@ -108,6 +150,7 @@ class ItemConcept(Base):
     feedback_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     discovery_mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
     discovery_quality_json: Mapped[str] = mapped_column(Text, default="{}")
+    spoiler_scope: Mapped[str] = mapped_column(String(30), default="premise_only")
     interested: Mapped[bool] = mapped_column(default=False)
     interest_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     interested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -148,6 +191,9 @@ class ItemEnrichment(Base):
     identity_status: Mapped[str] = mapped_column(String(30), default="unresolved")
     identity_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
     resolved_media_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    resolved_work_scope: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    parent_work_title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    canonical_identity_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
     identity_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     identity_candidates_json: Mapped[str] = mapped_column(Text, default="[]")
     identity_source_snapshot_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -163,6 +209,7 @@ class ResearchSource(Base):
     title: Mapped[str] = mapped_column(String(500))
     publisher: Mapped[str | None] = mapped_column(String(200), nullable=True)
     source_type: Mapped[str] = mapped_column(String(40), default="web")
+    evidence_roles_json: Mapped[str] = mapped_column(Text, default="[]")
     excerpt: Mapped[str] = mapped_column(Text)
     retrieval_status: Mapped[str] = mapped_column(String(30), default="retrieved")
     retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -229,6 +276,14 @@ class ItemCreate(BaseModel):
     url: str | None = Field(default=None, max_length=2000)
     creator: str | None = Field(default=None, max_length=300)
     release_year: int | None = Field(default=None, ge=1000, le=3000)
+    work_scope: WorkScope = WorkScope.unknown
+    parent_work_title: str | None = Field(default=None, max_length=300)
+    canonical_identity_id: str | None = Field(default=None, max_length=300)
+    progress_status: ProgressStatus = ProgressStatus.unknown
+    progress_current: int | None = Field(default=None, ge=0, le=100000)
+    progress_total: int | None = Field(default=None, ge=1, le=100000)
+    progress_unit: ProgressUnit = ProgressUnit.installment
+    spoiler_policy: SpoilerPolicy = SpoilerPolicy.avoid
 
     @field_validator("url")
     @classmethod
@@ -242,6 +297,14 @@ class ItemUpdate(BaseModel):
     url: str | None = Field(default=None, max_length=2000)
     creator: str | None = Field(default=None, max_length=300)
     release_year: int | None = Field(default=None, ge=1000, le=3000)
+    work_scope: WorkScope | None = None
+    parent_work_title: str | None = Field(default=None, max_length=300)
+    canonical_identity_id: str | None = Field(default=None, max_length=300)
+    progress_status: ProgressStatus | None = None
+    progress_current: int | None = Field(default=None, ge=0, le=100000)
+    progress_total: int | None = Field(default=None, ge=1, le=100000)
+    progress_unit: ProgressUnit | None = None
+    spoiler_policy: SpoilerPolicy | None = None
 
     @field_validator("url")
     @classmethod
@@ -257,6 +320,14 @@ class ItemRead(BaseModel):
     url: str | None
     creator: str | None
     release_year: int | None
+    work_scope: WorkScope
+    parent_work_title: str | None
+    canonical_identity_id: str | None
+    progress_status: ProgressStatus
+    progress_current: int | None
+    progress_total: int | None
+    progress_unit: ProgressUnit
+    spoiler_policy: SpoilerPolicy
     created_at: datetime
 
 class ConceptCategory(str, Enum):
@@ -312,6 +383,7 @@ class ConceptRead(BaseModel):
     feedback_key: str | None
     discovery_mode: str | None
     discovery_quality: dict[str, object] = Field(default_factory=dict)
+    spoiler_scope: str
     interested: bool
     interest_note: str | None
     interested_at: datetime | None
@@ -396,6 +468,7 @@ class ResearchSourceRead(BaseModel):
     title: str
     publisher: str | None
     source_type: str
+    evidence_roles: list[str] = Field(default_factory=list)
     excerpt: str
     retrieval_status: str
     retrieved_at: datetime
@@ -410,8 +483,12 @@ class EnrichmentRead(BaseModel):
     identity_status: str
     identity_key: str | None
     resolved_media_type: str | None
+    resolved_work_scope: str | None
+    parent_work_title: str | None
+    canonical_identity_id: str | None
     identity_confidence: float | None
     identity_candidates: list[dict[str, object]] = Field(default_factory=list)
+    identity_sources: list[dict[str, object]] = Field(default_factory=list)
     confirmed_at: datetime | None
     researched_at: datetime | None
     sources: list[ResearchSourceRead]
@@ -450,14 +527,14 @@ def migrate_additive_columns(target_engine=engine, database_url: str = DATABASE_
     if not database_url.startswith("sqlite"):
         return
     additions = {
-        "curiosity_items": {"creator": "VARCHAR(300)", "release_year": "INTEGER"},
-        "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "relationship_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME", "superseded_at": "DATETIME"},
+        "curiosity_items": {"creator": "VARCHAR(300)", "release_year": "INTEGER", "work_scope": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "parent_work_title": "VARCHAR(300)", "canonical_identity_id": "VARCHAR(300)", "progress_status": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "progress_current": "INTEGER", "progress_total": "INTEGER", "progress_unit": "VARCHAR(30) NOT NULL DEFAULT 'installment'", "spoiler_policy": "VARCHAR(30) NOT NULL DEFAULT 'avoid'"},
+        "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "relationship_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "spoiler_scope": "VARCHAR(30) NOT NULL DEFAULT 'premise_only'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME", "superseded_at": "DATETIME"},
         "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'"},
         "concept_sources": {"support_kind": "VARCHAR(20) NOT NULL DEFAULT 'relationship'"},
         "canonical_concepts": {"aliases_json": "TEXT NOT NULL DEFAULT '[]'", "label_kind": "VARCHAR(30) NOT NULL DEFAULT 'established_term'"},
         "concept_lead_audits": {"stage": "VARCHAR(30) NOT NULL DEFAULT 'concept_candidate'", "discovery_origin": "VARCHAR(30)", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "research_path": "TEXT", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "candidate_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "validation_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "automated_evidence_status": "VARCHAR(30) NOT NULL DEFAULT 'unverified'", "human_review_status": "VARCHAR(20) NOT NULL DEFAULT 'pending'", "human_review_note": "TEXT", "review_history_json": "TEXT NOT NULL DEFAULT '[]'", "kept_concept_id": "INTEGER", "last_evaluated_at": "DATETIME", "evidence_review_detail": "TEXT", "superseded_at": "DATETIME", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME"},
-        "item_enrichments": {"identity_status": "VARCHAR(30) NOT NULL DEFAULT 'unresolved'", "identity_key": "VARCHAR(300)", "resolved_media_type": "VARCHAR(40)", "identity_confidence": "FLOAT", "identity_candidates_json": "TEXT NOT NULL DEFAULT '[]'", "identity_source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "confirmed_at": "DATETIME"},
-        "research_sources": {"superseded_at": "DATETIME"},
+        "item_enrichments": {"identity_status": "VARCHAR(30) NOT NULL DEFAULT 'unresolved'", "identity_key": "VARCHAR(300)", "resolved_media_type": "VARCHAR(40)", "resolved_work_scope": "VARCHAR(30)", "parent_work_title": "VARCHAR(300)", "canonical_identity_id": "VARCHAR(300)", "identity_confidence": "FLOAT", "identity_candidates_json": "TEXT NOT NULL DEFAULT '[]'", "identity_source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "confirmed_at": "DATETIME"},
+        "research_sources": {"evidence_roles_json": "TEXT NOT NULL DEFAULT '[]'", "superseded_at": "DATETIME"},
     }
     with target_engine.begin() as connection:
         connection.exec_driver_sql(
@@ -536,6 +613,7 @@ def concept_read(concept: ItemConcept, db: Session) -> ConceptRead:
         concept_classification=concept.concept_classification, evidence_form=concept.evidence_form,
         feedback_key=concept.feedback_key, discovery_mode=concept.discovery_mode,
         discovery_quality=json.loads(concept.discovery_quality_json or "{}"),
+        spoiler_scope=concept.spoiler_scope,
         interested=concept.interested, interest_note=concept.interest_note, interested_at=concept.interested_at,
         loved=concept.loved, love_note=concept.love_note, loved_at=concept.loved_at,
         surprised=concept.surprised, surprise_note=concept.surprise_note, surprised_at=concept.surprised_at,
@@ -584,11 +662,19 @@ def enrichment_read(item_id: int, db: Session) -> EnrichmentRead:
         identity_status=enrichment.identity_status if enrichment else "unresolved",
         identity_key=enrichment.identity_key if enrichment else None,
         resolved_media_type=enrichment.resolved_media_type if enrichment else None,
+        resolved_work_scope=enrichment.resolved_work_scope if enrichment else None,
+        parent_work_title=enrichment.parent_work_title if enrichment else None,
+        canonical_identity_id=enrichment.canonical_identity_id if enrichment else None,
         identity_confidence=enrichment.identity_confidence if enrichment else None,
         identity_candidates=json.loads(enrichment.identity_candidates_json or "[]") if enrichment else [],
+        identity_sources=json.loads(enrichment.identity_source_snapshot_json or "[]") if enrichment else [],
         confirmed_at=enrichment.confirmed_at if enrichment else None,
         researched_at=enrichment.researched_at if enrichment else None,
-        sources=list(sources), concepts=[concept_read(concept, db) for concept in concepts],
+        sources=[ResearchSourceRead(
+            id=source.id, url=source.url, title=source.title, publisher=source.publisher,
+            source_type=source.source_type, evidence_roles=json.loads(source.evidence_roles_json or "[]"),
+            excerpt=source.excerpt, retrieval_status=source.retrieval_status, retrieved_at=source.retrieved_at,
+        ) for source in sources], concepts=[concept_read(concept, db) for concept in concepts],
         rejected_leads=[rejected_finding_read(lead, db) for lead in rejected],
     )
 
@@ -600,8 +686,44 @@ def normalize_concept_term(value: str) -> str:
 WORK_KINDS = {Kind.book.value, Kind.movie.value, Kind.tv_series.value, Kind.podcast.value, Kind.article.value}
 
 
+def spoiler_ceiling(item: CuriosityItem) -> str:
+    if item.spoiler_policy == SpoilerPolicy.full.value or item.progress_status in {ProgressStatus.finished.value, ProgressStatus.rereading.value, ProgressStatus.rewatching.value}:
+        return "full"
+    if item.spoiler_policy == SpoilerPolicy.through_progress.value and item.progress_current is not None:
+        return "within_progress"
+    return "premise_only"
+
+
+def item_ai_payload(item: CuriosityItem) -> dict[str, object]:
+    return {
+        "kind": item.kind, "title": item.title, "note": item.note, "url": item.url,
+        "creator": item.creator, "release_year": item.release_year,
+        "work_scope": item.work_scope, "parent_work_title": item.parent_work_title,
+        "canonical_identity_id": item.canonical_identity_id,
+        "progress": {
+            "status": item.progress_status, "current": item.progress_current,
+            "total": item.progress_total, "unit": item.progress_unit,
+        },
+        "spoiler_policy": item.spoiler_policy, "spoiler_ceiling": spoiler_ceiling(item),
+    }
+
+
+def validate_progress_values(current: int | None, total: int | None, unit: str) -> None:
+    if current is not None and total is not None and current > total:
+        raise HTTPException(422, "Progress cannot be greater than the total.")
+    if unit == ProgressUnit.percent.value and ((current is not None and current > 100) or (total is not None and total != 100)):
+        raise HTTPException(422, "Percent progress must be between 0 and 100, with a total of 100 when supplied.")
+
+
+def anchor_within_spoiler_scope(anchor, item: CuriosityItem) -> bool:
+    order = {"premise_only": 0, "within_progress": 1, "full": 2}
+    return order[anchor.spoiler_scope] <= order[spoiler_ceiling(item)]
+
+
 def identity_key(candidate: EntityCandidate) -> str:
     parts = [candidate.media_type, normalize_concept_term(candidate.title), normalize_concept_term(candidate.creator), str(candidate.release_year or "")]
+    if candidate.work_scope != WorkScope.unknown.value:
+        parts.extend((candidate.work_scope, normalize_concept_term(candidate.parent_work_title), candidate.canonical_identity_id.strip().casefold()))
     return "|".join(parts)
 
 
@@ -614,6 +736,9 @@ def identity_candidate_is_valid(candidate: EntityCandidate, item: CuriosityItem,
         and set(candidate.source_ids) <= source_ids
         and (not item.creator or normalize_concept_term(item.creator) in normalize_concept_term(candidate.creator))
         and (not item.release_year or item.release_year == candidate.release_year)
+        and (item.work_scope == WorkScope.unknown.value or candidate.work_scope == item.work_scope)
+        and (not item.parent_work_title or normalize_concept_term(item.parent_work_title) == normalize_concept_term(candidate.parent_work_title))
+        and (not item.canonical_identity_id or item.canonical_identity_id.casefold() == candidate.canonical_identity_id.casefold())
     )
 
 
@@ -632,6 +757,9 @@ def save_identity_resolution(item: CuriosityItem, resolution, sources: list[dict
         enrichment.creator = candidate.creator or None
         enrichment.release_info = str(candidate.release_year) if candidate.release_year else None
         enrichment.resolved_media_type = candidate.media_type
+        enrichment.resolved_work_scope = candidate.work_scope
+        enrichment.parent_work_title = candidate.parent_work_title or None
+        enrichment.canonical_identity_id = candidate.canonical_identity_id or None
         enrichment.identity_summary = candidate.description
         enrichment.identity_confidence = candidate.confidence
         enrichment.confirmed_at = datetime.now(timezone.utc)
@@ -811,6 +939,7 @@ def list_items(q: str = Query(default="", max_length=240), kind: Kind | None = N
 def create_item(data: ItemCreate, db: Session = Depends(get_db)):
     if not data.title.strip():
         raise HTTPException(422, "Title cannot be blank")
+    validate_progress_values(data.progress_current, data.progress_total, data.progress_unit.value)
     item = CuriosityItem(**{**data.model_dump(), "title": data.title.strip()})
     db.add(item)
     db.commit()
@@ -1007,7 +1136,7 @@ def extract_concepts(item_id: int, db: Session = Depends(get_db), ai: OpenRouter
     if item is None:
         raise HTTPException(404, "Item not found")
     try:
-        extraction = ai.extract_concepts({"kind": item.kind, "title": item.title, "note": item.note, "url": item.url})
+        extraction = ai.extract_concepts(item_ai_payload(item))
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc
     now = datetime.now(timezone.utc)
@@ -1042,7 +1171,7 @@ def resolve_item_identity(item_id: int, db: Session = Depends(get_db), ai: OpenR
         db.add(enrichment)
         db.commit()
         return enrichment_read(item_id, db)
-    payload = {"kind": item.kind, "title": item.title, "note": item.note, "url": item.url, "creator": item.creator, "release_year": item.release_year}
+    payload = item_ai_payload(item)
     try:
         packet = research.research(payload)
         source_payloads = [{"source_id": f"identity-{index}", "title": source.title, "excerpt": source.excerpt[:2500], "url": source.url} for index, source in enumerate(packet.sources, 1)]
@@ -1067,6 +1196,8 @@ def confirm_item_identity(item_id: int, data: IdentityConfirmation, db: Session 
         raise HTTPException(422, "That identity candidate is no longer available. Resolve the work again.")
     if candidate.media_type != item.kind:
         raise HTTPException(422, "The selected identity does not match this curiosity's media type.")
+    if item.work_scope != WorkScope.unknown.value and candidate.work_scope != item.work_scope:
+        raise HTTPException(422, "The selected identity does not match this curiosity's work scope.")
     changed = enrichment.identity_key != identity_key(candidate) and (enrichment.identity_key is not None or enrichment.status == "researched")
     if changed:
         retire_stale_identity_research(item_id, db)
@@ -1076,6 +1207,9 @@ def confirm_item_identity(item_id: int, data: IdentityConfirmation, db: Session 
     enrichment.creator = candidate.creator or None
     enrichment.release_info = str(candidate.release_year) if candidate.release_year else None
     enrichment.resolved_media_type = candidate.media_type
+    enrichment.resolved_work_scope = candidate.work_scope
+    enrichment.parent_work_title = candidate.parent_work_title or None
+    enrichment.canonical_identity_id = candidate.canonical_identity_id or None
     enrichment.identity_summary = candidate.description
     enrichment.identity_confidence = candidate.confidence
     enrichment.confirmed_at = datetime.now(timezone.utc)
@@ -1099,6 +1233,9 @@ def reset_item_identity(item_id: int, db: Session = Depends(get_db)):
     enrichment.creator = None
     enrichment.release_info = None
     enrichment.resolved_media_type = None
+    enrichment.resolved_work_scope = None
+    enrichment.parent_work_title = None
+    enrichment.canonical_identity_id = None
     enrichment.identity_summary = None
     enrichment.identity_confidence = None
     enrichment.identity_candidates_json = "[]"
@@ -1114,7 +1251,7 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
     item = db.get(CuriosityItem, item_id)
     if item is None:
         raise HTTPException(404, "Item not found")
-    payload = {"kind": item.kind, "title": item.title, "note": item.note, "url": item.url, "creator": item.creator, "release_year": item.release_year}
+    payload = item_ai_payload(item)
     enrichment = db.get(ItemEnrichment, item_id)
     try:
         packet = None
@@ -1135,13 +1272,16 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             payload["confirmed_identity"] = {
                 "identity_key": enrichment.identity_key, "title": enrichment.resolved_title,
                 "creator": enrichment.creator, "release_info": enrichment.release_info,
-                "media_type": enrichment.resolved_media_type,
+                "media_type": enrichment.resolved_media_type, "work_scope": enrichment.resolved_work_scope,
+                "parent_work_title": enrichment.parent_work_title,
+                "canonical_identity_id": enrichment.canonical_identity_id,
             }
         if packet is None:
             packet = research.research(payload)
         work_source_payloads = [{"source_id": f"work-{index}", "title": source.title, "excerpt": source.excerpt[:2500]} for index, source in enumerate(packet.sources, 1)]
         work_source_urls = {payload["source_id"]: source.url for payload, source in zip(work_source_payloads, packet.sources)}
         understanding = ai.understand_work(payload, packet.synthesis, work_source_payloads)
+        understanding = understanding.model_copy(update={"spoiler_ceiling": spoiler_ceiling(item)})
         if item.kind in {Kind.concept.value, Kind.question.value, Kind.thought.value}:
             understanding = understanding.model_copy(update={"ambiguous_identity": False, "confirmation_question": "", "resolved_title": understanding.resolved_title or item.title, "identity_matches_sources": True})
     except (AIConfigurationError, AIProviderError) as exc:
@@ -1171,6 +1311,8 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             raise AIProviderError("Work-anchor generation returned duplicate identifiers. Existing research was preserved.")
         if problem_reason := next((reason for problem in proposed_anchors.problems if (reason := research_problem_rejection(problem, work_source_ids, item.title))), None):
             raise AIProviderError(f"Work-anchor validation failed: {problem_reason} Existing research was preserved.")
+        if any(not anchor_within_spoiler_scope(problem, item) for problem in proposed_anchors.problems):
+            raise AIProviderError("Work-anchor validation failed: a proposed observation exceeds the saved spoiler boundary. Existing research was preserved.")
         selected_anchors, research_anchors = select_diverse_anchors(proposed_anchors.problems)
         # The internal research subset may intentionally be empty: grounded
         # observations do not need external research to be worth preserving.
@@ -1254,12 +1396,21 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
     for source, source_type in unique_sources.values():
         saved = db.scalar(select(ResearchSource).where(ResearchSource.item_id == item_id, ResearchSource.url == source.url))
         if saved is None:
-            saved = ResearchSource(item_id=item_id, url=source.url, title=source.title[:500], publisher=urlparse(source.url).netloc or None, source_type=source_type, excerpt=source.excerpt[:2500])
+            roles = []
+            if source_type in {"work", "work_and_concept"}:
+                roles.extend(("work_identity", "work_detail"))
+            if source_type in {"concept_research", "evidence_recovery", "work_and_concept"}:
+                roles.append("external_concept")
+            saved = ResearchSource(item_id=item_id, url=source.url, title=source.title[:500], publisher=urlparse(source.url).netloc or None, source_type=source_type, evidence_roles_json=json.dumps(roles), excerpt=source.excerpt[:2500])
             db.add(saved)
         else:
             saved.title = source.title[:500]
             saved.publisher = urlparse(source.url).netloc or None
             saved.source_type = source_type
+            roles = set(json.loads(saved.evidence_roles_json or "[]"))
+            roles.update(("work_identity", "work_detail") if source_type in {"work", "work_and_concept"} else ())
+            roles.update(("external_concept",) if source_type in {"concept_research", "evidence_recovery", "work_and_concept"} else ())
+            saved.evidence_roles_json = json.dumps(sorted(roles))
             saved.excerpt = source.excerpt[:2500]
             saved.retrieval_status = "retrieved"
             saved.retrieved_at = datetime.now(timezone.utc)
@@ -1322,7 +1473,8 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             initial_validation_outcome="Work-source evidence and anchor specificity passed deterministic checks.",
             final_validation_outcome="Grounded observation accepted independently of external concept research.",
             review_audit_id=audit.id, concept_classification="grounded_observation", evidence_form="paraphrase",
-            discovery_mode=anchor.discovery_mode, discovery_quality_json=quality_json, **feedback,
+            discovery_mode=anchor.discovery_mode, discovery_quality_json=quality_json,
+            spoiler_scope=anchor.spoiler_scope, **feedback,
         )
         db.add(observation)
         db.flush()
@@ -1359,7 +1511,10 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             canonical = resolve_canonical_concept(db, extracted.canonical_name, extracted.aliases, extracted.definition, extracted.domain, extracted.mechanism, extracted.concept_verification, extracted.label_kind) if extracted.concept_classification == "established_concept" else None
             key = concept_feedback_key(extracted.canonical_name, extracted.concept_classification)
             feedback = feedback_state(item_id, key, extracted.canonical_name, db)
-            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id if canonical else None, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.", concept_classification=extracted.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in extracted.concept_evidence) else "quotation", **feedback)
+            problem_scope = {problem.problem_id: problem.spoiler_scope for problem in research_anchors}
+            scope_order = {"premise_only": 0, "within_progress": 1, "full": 2}
+            extracted_scope = max((problem_scope.get(problem_id, "premise_only") for problem_id in next((candidate.problem_ids for candidate in candidates.candidates if candidate.candidate_id == extracted.candidate_id), [])), key=lambda value: scope_order[value], default="premise_only")
+            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id if canonical else None, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.", concept_classification=extracted.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in extracted.concept_evidence) else "quotation", spoiler_scope=extracted_scope, **feedback)
             db.add(concept)
             db.flush()
             support_by_url: dict[str, set[str]] = {}
@@ -1371,6 +1526,10 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
                 url = work_source_urls.get(source_id)
                 if url:
                     support_by_url.setdefault(url, set()).add("relationship")
+                    if url in saved_sources:
+                        relationship_roles = set(json.loads(saved_sources[url].evidence_roles_json or "[]"))
+                        relationship_roles.add("concept_relationship")
+                        saved_sources[url].evidence_roles_json = json.dumps(sorted(relationship_roles))
             for source_id in extracted.discovery_source_ids:
                 url = concept_source_urls.get(source_id)
                 if url:
@@ -1445,10 +1604,10 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         def concept_payload(concept: ItemConcept) -> dict[str, object]:
             source_urls = [] if concept.origin == "user_kept" else list(db.scalars(select(ResearchSource.url).join(ConceptSource, ConceptSource.source_id == ResearchSource.id).where(ConceptSource.concept_id == concept.id)).all())
             generic = any(re.search(pattern, concept.name.casefold()) for pattern in (r"\bcoming of age\b", r"\bteam dynamics\b", r"\boppression\b", r"\bmilitary strateg"))
-            return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "mechanism": concept.mechanism, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "human_kept": concept.origin == "user_kept", "interested": concept.interested, "loved": concept.loved, "surprised": concept.surprised, "discovery_mode": concept.discovery_mode, "discovery_quality": json.loads(concept.discovery_quality_json or "{}"), "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
+            return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "mechanism": concept.mechanism, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "spoiler_scope": concept.spoiler_scope, "human_kept": concept.origin == "user_kept", "interested": concept.interested, "loved": concept.loved, "surprised": concept.surprised, "discovery_mode": concept.discovery_mode, "discovery_quality": json.loads(concept.discovery_quality_json or "{}"), "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
         pair_payloads.append({
-            "item_a": {"id": item_a.id, "kind": item_a.kind, "title": item_a.title, "note": item_a.note, "concepts": [concept_payload(c) for c in by_item[item_a.id]]},
-            "item_b": {"id": item_b.id, "kind": item_b.kind, "title": item_b.title, "note": item_b.note, "concepts": [concept_payload(c) for c in by_item[item_b.id]]},
+            "item_a": {**item_ai_payload(item_a), "id": item_a.id, "concepts": [concept_payload(c) for c in by_item[item_a.id]]},
+            "item_b": {**item_ai_payload(item_b), "id": item_b.id, "concepts": [concept_payload(c) for c in by_item[item_b.id]]},
         })
     try:
         generated = ai.generate_candidates(pair_payloads)
@@ -1493,13 +1652,19 @@ def update_item(item_id: int, data: ItemUpdate, db: Session = Depends(get_db)):
     if item is None:
         raise HTTPException(404, "Item not found")
     changes = data.model_dump(exclude_unset=True)
-    if "kind" in changes and changes["kind"] is None:
-        raise HTTPException(422, "Kind cannot be null")
+    for required in ("kind", "work_scope", "progress_status", "progress_unit", "spoiler_policy"):
+        if required in changes and changes[required] is None:
+            raise HTTPException(422, f"{required.replace('_', ' ').title()} cannot be null")
     if "title" in changes:
         if changes["title"] is None or not changes["title"].strip():
             raise HTTPException(422, "Title cannot be blank")
         changes["title"] = changes["title"].strip()
-    identity_changed = any(field in changes and changes[field] != getattr(item, field) for field in ("kind", "title", "creator", "release_year"))
+    current_progress = changes.get("progress_current", item.progress_current)
+    total_progress = changes.get("progress_total", item.progress_total)
+    progress_unit = changes.get("progress_unit", item.progress_unit)
+    validate_progress_values(current_progress, total_progress, progress_unit.value if isinstance(progress_unit, ProgressUnit) else progress_unit)
+    identity_changed = any(field in changes and changes[field] != getattr(item, field) for field in ("kind", "title", "creator", "release_year", "work_scope", "parent_work_title", "canonical_identity_id"))
+    spoiler_scope_changed = any(field in changes and changes[field] != getattr(item, field) for field in ("progress_status", "progress_current", "progress_total", "progress_unit", "spoiler_policy"))
     if identity_changed:
         enrichment = db.get(ItemEnrichment, item_id)
         if enrichment is not None:
@@ -1510,6 +1675,14 @@ def update_item(item_id: int, data: ItemUpdate, db: Session = Depends(get_db)):
             enrichment.identity_candidates_json = "[]"
             enrichment.identity_source_snapshot_json = "[]"
             enrichment.confirmed_at = None
+            enrichment.resolved_work_scope = None
+            enrichment.parent_work_title = None
+            enrichment.canonical_identity_id = None
+    elif spoiler_scope_changed:
+        enrichment = db.get(ItemEnrichment, item_id)
+        if enrichment is not None and enrichment.status == "researched":
+            retire_stale_identity_research(item_id, db)
+            enrichment.status = "not_researched"
     for field, value in changes.items():
         setattr(item, field, value)
     db.commit()

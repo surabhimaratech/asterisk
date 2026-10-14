@@ -67,7 +67,7 @@ If an earlier installation has `backend/curiosity.db`, Asterisk copies it to the
 - `GET /api/sidequests` — revisit saved Sidequests
 - `POST /api/sidequests/surprise` — generate and save one Sidequest
 
-Item kinds: `book`, `movie`, `tv_series`, `podcast`, `article`, `concept`, `question`, and `thought` (shown as “Random thought” in the interface). Each item has a title, optional personal note, source URL, creator and release year, plus an automatic creation timestamp. Creator and year stay behind the lightweight “More identifying details” control.
+Item kinds: `book`, `movie`, `tv_series`, `podcast`, `article`, `concept`, `question`, and `thought` (shown as “Random thought” in the interface). Each item has a title, optional personal note, source URL, creator and release year, plus an automatic creation timestamp. For works, the lightweight “Identity, progress & spoilers” control can also distinguish an individual work, series, collection, installment, or adaptation; record partial progress; and set a spoiler boundary.
 
 ## Configure AI features
 
@@ -83,11 +83,13 @@ cp .env.example .env
 
 `OPENROUTER_API_KEY` is required. `OPENROUTER_MODEL` defaults to `openai/gpt-4o-mini`, `OPENROUTER_TIMEOUT_SECONDS` defaults to `30`, and `OPENROUTER_SEARCH_ENGINE` defaults to `exa`. Choose a model whose OpenRouter page lists structured-output and tool-use support.
 
-**Enrich with Research** is explicitly user-triggered and billable. For books, movies, TV series, podcasts, and articles, Asterisk first resolves the exact work. An exact high-confidence title/media match is persisted; multiple plausible matches stop at a disambiguation screen. Confirmed title, creator, year, and media type are reused by later searches, and retrieved work sources must match that identity. Correcting an identity retires stale AI findings while preserving notes, manual concepts, and audit history.
+**Enrich with Research** is explicitly user-triggered and billable. For books, movies, TV series, podcasts, and articles, Asterisk first resolves the exact work. An exact high-confidence title, media, and work-scope match is persisted; multiple plausible matches stop at a disambiguation screen. A series cannot silently resolve to its first installment. Confirmed title, creator, year, media type, scope, parent work, and reliable canonical identifier are reused by later searches. Correcting an identity retires stale AI findings while preserving notes, manual concepts, and audit history.
+
+Research defaults to premise-only material when progress is unknown. A saved progress boundary is included in work research, extraction, and Sidequest context, and generated observations carry an explicit spoiler scope that the backend checks before persistence. Changing progress or spoiler preferences supersedes current AI research so it must be regenerated under the new boundary; it does not delete the confirmed identity or user-authored concepts. Source records separately identify evidence used for work identity, work details, and external concepts, while identity-source snapshots remain inspectable.
 
 After identity resolution, enrichment first identifies several specific anchors inside the work: character tensions, worldbuilding rules, narrative techniques, recurring motifs, striking systems, or revealing situations. It deterministically selects a diverse set of roughly 3–5 grounded observations, then researches only the strongest configured subset. `DISCOVERY_MAX_ANCHORS` defaults to `5` and `DISCOVERY_MAX_RESEARCH_ANCHORS` defaults to `3`. This selection adds no model call, and grounded observations remain useful discoveries even when they do not lead to an external academic concept or Sidequest.
 
-The selected observations support two discovery modes: **deepen fascination**, which follows something already compelling in the work, and **reveal an overlooked perspective**, which surfaces a less obvious lens. External research still uses bounded OpenRouter work research, evidence-grounded concept extraction, and relationship validation. Search-tool charges and ordinary model token charges apply. If external research fails, Asterisk does not invent a concept; the separately work-supported observations remain available. Research permits full spoilers for items already in your library.
+The selected observations support two discovery modes: **deepen fascination**, which follows something already compelling in the work, and **reveal an overlooked perspective**, which surfaces a less obvious lens. External research still uses bounded OpenRouter work research, evidence-grounded concept extraction, and relationship validation. Search-tool charges and ordinary model token charges apply. If external research fails, Asterisk does not invent a concept; the separately work-supported observations remain available. Research permits full spoilers only when the item is marked finished/re-reading/rewatching or the user explicitly allows them.
 
 Extraction scans the full independent research corpus, not only passages that answer the first research problems. Accepted results distinguish **From the work** (`work_grounded`) from **Found while exploring** (`research_led`). Research-led concepts need independent definition and mechanism evidence plus a traceable research path, but may honestly report that no direct relationship to the saved work was established.
 
@@ -130,7 +132,8 @@ Candidates that pass this gate still require human review for surprise, conceptu
 ## Roadmap
 1. **Milestone 1**: capture, list, search, filter, edit, and delete
 2. **Milestone 2**: user-triggered concept extraction and experimental Sidequests
-3. **Milestone 3 (current)**: work-first discoveries, dual discovery modes, and feedback-informed exploration
+3. **Milestone 3**: work-first discoveries, dual discovery modes, and feedback-informed exploration
+4. **Milestone 4 (in progress)**: curiosity-first discovery, explicit work scope, progress-aware research, and clearer paths into exploration
 
 ## Privacy
 Library data and SQLite remain local. When you explicitly use Explore Concepts or Surprise Me, relevant titles, notes, URL strings, and concepts are sent to the configured AI provider. API keys remain in backend environment variables and are never sent to the browser or stored in Git.
