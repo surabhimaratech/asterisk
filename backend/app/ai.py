@@ -17,11 +17,17 @@ from .prompts import (
     enrichment_input,
     research_input,
     CONCEPT_RESEARCH_SYSTEM_PROMPT,
-    LEADS_SYSTEM_PROMPT,
+    EVIDENCE_EXTRACTION_SYSTEM_PROMPT,
+    EVIDENCE_RECOVERY_SYSTEM_PROMPT,
+    PROBLEM_SYSTEM_PROMPT,
+    RECOVERY_RESEARCH_SYSTEM_PROMPT,
     UNDERSTANDING_SYSTEM_PROMPT,
     VALIDATION_SYSTEM_PROMPT,
-    concept_research_input,
-    leads_input,
+    evidence_extraction_input,
+    evidence_recovery_input,
+    problem_input,
+    problem_research_input,
+    recovery_research_input,
     understanding_input,
     validation_input,
 )
@@ -83,43 +89,88 @@ class WorkUnderstanding(BaseModel):
     systems_and_causal_relations: list[str] = Field(max_length=8)
 
 
-class ConceptualLead(BaseModel):
+class ResearchProblem(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    name: str = Field(min_length=1, max_length=160)
-    proposed_definition: str = Field(min_length=1, max_length=700)
-    motivating_detail: str = Field(min_length=1, max_length=900)
-    proposed_relationship: str = Field(min_length=1, max_length=900)
-    relationship_type: Literal["explicit", "illustrated", "interpretive"]
-    research_questions: list[str] = Field(min_length=1, max_length=4)
+    problem_id: str = Field(min_length=1, max_length=60)
+    concrete_description: str = Field(min_length=1, max_length=700)
+    work_situation: str = Field(min_length=1, max_length=900)
+    intellectual_question: str = Field(min_length=1, max_length=500)
+    relevant_domains: list[str] = Field(min_length=1, max_length=5)
+    evidence_source_ids: list[str] = Field(min_length=1, max_length=5)
+    research_queries: list[str] = Field(min_length=1, max_length=4)
 
 
-class ConceptualLeadBatch(BaseModel):
+class ResearchProblemBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    leads: list[ConceptualLead] = Field(min_length=1, max_length=5)
+    problems: list[ResearchProblem] = Field(min_length=1, max_length=5)
+
+
+class EvidenceReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_id: str = Field(min_length=1, max_length=60)
+    excerpt: str = Field(min_length=1, max_length=900)
+
+
+class EvidenceConceptCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate_id: str = Field(min_length=1, max_length=60)
+    problem_ids: list[str] = Field(min_length=1, max_length=5)
+    discovery_origin: Literal["work_grounded", "research_led"]
+    discovery_source_ids: list[str] = Field(min_length=1, max_length=5)
+    research_path: str = Field(min_length=1, max_length=900)
+    label_kind: Literal["established_term", "descriptive_label"]
+    canonical_name: str = Field(min_length=1, max_length=160)
+    aliases: list[str] = Field(max_length=8)
+    definition: str = Field(min_length=1, max_length=900)
+    domain: str = Field(min_length=1, max_length=120)
+    mechanism: str = Field(min_length=1, max_length=1200)
+    concept_evidence: list[EvidenceReference] = Field(min_length=1, max_length=5)
+    curiosity_hook: str | None = Field(max_length=500)
+    uncertainty: str = Field(max_length=700)
+
+
+class EvidenceConceptBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidates: list[EvidenceConceptCandidate] = Field(max_length=8)
+    insufficient_evidence_reasons: list[str] = Field(max_length=8)
+
+
+class EvidenceRecoveryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate_id: str = Field(min_length=1, max_length=60)
+    recovered: bool
+    reason: str = Field(max_length=700)
+    concept_evidence: list[EvidenceReference] = Field(max_length=5)
 
 
 class ValidatedConcept(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    lead_name: str = Field(min_length=1, max_length=160)
+    candidate_id: str = Field(min_length=1, max_length=60)
     accepted: bool
     rejection_reason: str = Field(max_length=700)
+    discovery_origin: Literal["work_grounded", "research_led"]
+    discovery_source_ids: list[str] = Field(max_length=5)
+    research_path: str = Field(max_length=900)
+    label_kind: Literal["established_term", "descriptive_label"]
     canonical_name: str = Field(max_length=160)
+    aliases: list[str] = Field(max_length=8)
     level: Literal["concept", "mechanism"]
     definition: str = Field(max_length=900)
+    concept_evidence: list[EvidenceReference] = Field(max_length=5)
     domain: str = Field(max_length=120)
     mechanism: str = Field(max_length=1200)
-    relationship_type: Literal["explicit", "illustrated", "interpretive"]
+    relationship_type: Literal["explicit", "illustrated", "interpretive", "unsupported"]
     relationship_evidence: str = Field(max_length=1200)
     concept_verification: Literal["verified", "partially_verified", "unverified"]
     relationship_verification: Literal["verified", "supported_interpretation", "unverified"]
     confidence: float = Field(ge=0, le=1)
-    concept_source_urls: list[str] = Field(max_length=5)
-    relationship_source_urls: list[str] = Field(max_length=5)
+    relationship_source_ids: list[str] = Field(max_length=5)
+    curiosity_hook: str | None = Field(max_length=500)
 
 
 class ConceptValidationBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    results: list[ValidatedConcept] = Field(min_length=1, max_length=7)
+    results: list[ValidatedConcept] = Field(max_length=8)
 
 
 class ConnectionCandidate(BaseModel):
@@ -241,13 +292,17 @@ class OpenRouterClient:
                 raise
             raise AIProviderError("The research provider returned an invalid response.") from exc
 
-    def research_concepts(self, item: dict[str, object], leads: list[dict[str, object]]) -> tuple[str, list[dict[str, str]]]:
-        return self._web_research(CONCEPT_RESEARCH_SYSTEM_PROMPT, concept_research_input(item, leads), "Concept research")
+    def research_problems(self, _item: dict[str, object], problems: list[dict[str, object]]) -> tuple[str, list[dict[str, str]]]:
+        return self._web_research(CONCEPT_RESEARCH_SYSTEM_PROMPT, problem_research_input(problems), "Concept research")
 
-    def _web_research(self, system: str, user: str, label: str) -> tuple[str, list[dict[str, str]]]:
+    def research_candidate_evidence(self, candidate: dict[str, object]) -> tuple[str, list[dict[str, str]]]:
+        max_results = max(1, min(int(os.getenv("EVIDENCE_RECOVERY_MAX_SEARCH_RESULTS", "4")), 5))
+        return self._web_research(RECOVERY_RESEARCH_SYSTEM_PROMPT, recovery_research_input(candidate), "Evidence recovery", max_results=2, max_total_results=max_results)
+
+    def _web_research(self, system: str, user: str, label: str, max_results: int = 3, max_total_results: int = 12) -> tuple[str, list[dict[str, str]]]:
         if not self.api_key:
             raise AIConfigurationError("OPENROUTER_API_KEY is not configured. Add it to your local .env file and restart Asterisk.")
-        payload = {"model": self.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "tools": [{"type": "openrouter:web_search", "parameters": {"engine": os.getenv("OPENROUTER_SEARCH_ENGINE", "exa"), "max_results": 3, "max_total_results": 12, "max_characters": 2200}}], "max_tokens": 1800}
+        payload = {"model": self.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "tools": [{"type": "openrouter:web_search", "parameters": {"engine": os.getenv("OPENROUTER_SEARCH_ENGINE", "exa"), "max_results": max_results, "max_total_results": max_total_results, "max_characters": 2200}}], "max_tokens": 1800}
         try:
             with httpx.Client(timeout=max(self.timeout, 45)) as client:
                 response = client.post(f"{self.base_url}/chat/completions", headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, json=payload)
@@ -287,11 +342,17 @@ class OpenRouterClient:
     def understand_work(self, item: dict[str, object], synthesis: str, sources: list[dict[str, str]]) -> WorkUnderstanding:
         return self._structured(UNDERSTANDING_SYSTEM_PROMPT, understanding_input(item, synthesis, sources), WorkUnderstanding, "work_understanding", 1800)  # type: ignore[return-value]
 
-    def generate_conceptual_leads(self, understanding: WorkUnderstanding) -> ConceptualLeadBatch:
-        return self._structured(LEADS_SYSTEM_PROMPT, leads_input(understanding.model_dump()), ConceptualLeadBatch, "conceptual_leads", 1800)  # type: ignore[return-value]
+    def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
+        return self._structured(PROBLEM_SYSTEM_PROMPT, problem_input(understanding.model_dump(), work_sources), ResearchProblemBatch, "research_problems", 2200)  # type: ignore[return-value]
 
-    def validate_concepts(self, understanding: WorkUnderstanding, leads: ConceptualLeadBatch, work_sources: list[dict[str, str]], concept_synthesis: str, concept_sources: list[dict[str, str]]) -> ConceptValidationBatch:
-        return self._structured(VALIDATION_SYSTEM_PROMPT, validation_input(understanding.model_dump(), [lead.model_dump() for lead in leads.leads], work_sources, concept_synthesis, concept_sources), ConceptValidationBatch, "concept_validation", 2600)  # type: ignore[return-value]
+    def extract_evidence_concepts(self, problems: ResearchProblemBatch, concept_synthesis: str, concept_sources: list[dict[str, str]]) -> EvidenceConceptBatch:
+        return self._structured(EVIDENCE_EXTRACTION_SYSTEM_PROMPT, evidence_extraction_input([problem.model_dump() for problem in problems.problems], concept_synthesis, concept_sources), EvidenceConceptBatch, "evidence_concepts", 2400)  # type: ignore[return-value]
+
+    def recover_candidate_evidence(self, candidate: EvidenceConceptCandidate, recovery_synthesis: str, recovery_sources: list[dict[str, str]]) -> EvidenceRecoveryResult:
+        return self._structured(EVIDENCE_RECOVERY_SYSTEM_PROMPT, evidence_recovery_input(candidate.model_dump(), recovery_synthesis, recovery_sources), EvidenceRecoveryResult, "evidence_recovery", 1000)  # type: ignore[return-value]
+
+    def validate_concepts(self, understanding: WorkUnderstanding, problems: ResearchProblemBatch, candidates: EvidenceConceptBatch, work_sources: list[dict[str, str]], concept_sources: list[dict[str, str]]) -> ConceptValidationBatch:
+        return self._structured(VALIDATION_SYSTEM_PROMPT, validation_input(understanding.model_dump(), [problem.model_dump() for problem in problems.problems], [candidate.model_dump() for candidate in candidates.candidates], work_sources, concept_sources), ConceptValidationBatch, "concept_validation", 3000)  # type: ignore[return-value]
 
 
 def get_ai_client() -> OpenRouterClient:
