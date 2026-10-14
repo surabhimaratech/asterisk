@@ -2,25 +2,26 @@ import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './style.css'
 
-type Kind = 'book' | 'movie' | 'podcast' | 'article' | 'concept' | 'question' | 'thought'
+type Kind = 'book' | 'movie' | 'tv_series' | 'podcast' | 'article' | 'concept' | 'question' | 'thought'
 type ViewMode = 'library' | 'index'
-type Item = { id: number; kind: Kind; title: string; note: string | null; url: string | null; created_at: string }
-type ItemConcept = { id: number; item_id: number; canonical_concept_id: number | null; name: string; category: 'personal' | 'general' | 'mechanism'; origin: 'ai' | 'user' | 'user_kept'; explanation: string | null; level: 'topic' | 'concept' | 'mechanism' | null; relationship: string | null; evidence_status: string | null; confidence: number | null; source_ids: number[]; source_support: { source_id: number; support_kind: string }[]; canonical_name: string | null; definition: string | null; domain: string | null; mechanism: string | null; relationship_type: 'explicit' | 'illustrated' | 'interpretive' | 'unsupported' | null; relationship_evidence: string | null; concept_verification: string | null; relationship_verification: string | null; label_kind: 'established_term' | 'descriptive_label' | null; curiosity_hook: string | null; discovery_origin: 'work_grounded' | 'research_led' | null; discovery_source_ids: string[]; research_path: string | null; initial_validation_outcome: string | null; recovery_attempt: Record<string, unknown> | null; final_validation_outcome: string | null; review_audit_id: number | null; user_note: string | null; created_at: string }
+type Item = { id: number; kind: Kind; title: string; note: string | null; url: string | null; creator: string | null; release_year: number | null; created_at: string }
+type ItemConcept = { id: number; item_id: number; canonical_concept_id: number | null; name: string; category: 'personal' | 'general' | 'mechanism'; origin: 'ai' | 'user' | 'user_kept'; explanation: string | null; level: 'topic' | 'concept' | 'mechanism' | null; relationship: string | null; evidence_status: string | null; confidence: number | null; source_ids: number[]; source_support: { source_id: number; support_kind: string }[]; canonical_name: string | null; definition: string | null; domain: string | null; mechanism: string | null; relationship_type: 'explicit' | 'illustrated' | 'interpretive' | 'unsupported' | null; relationship_evidence: string | null; concept_verification: string | null; relationship_verification: string | null; label_kind: 'established_term' | 'descriptive_label' | null; concept_classification: 'established_concept' | 'grounded_interpretation' | 'speculative_connection' | null; evidence_form: 'quotation' | 'paraphrase' | null; curiosity_hook: string | null; discovery_origin: 'work_grounded' | 'research_led' | null; discovery_source_ids: string[]; research_path: string | null; initial_validation_outcome: string | null; recovery_attempt: Record<string, unknown> | null; final_validation_outcome: string | null; review_audit_id: number | null; user_note: string | null; interested: boolean; interest_note: string | null; interested_at: string | null; created_at: string }
 type ResearchSource = { id: number; url: string; title: string; publisher: string | null; source_type: string; excerpt: string; retrieval_status: string; retrieved_at: string }
 type FindingSource = { source_id?: string; id?: number; url?: string; title?: string; excerpt?: string; source_type?: string }
-type RejectedFinding = { id: number; item_id: number; item_title: string; item_kind: Kind; name: string; stage: 'research_problem' | 'concept_candidate'; proposed_definition: string; motivating_detail: string; proposed_relationship: string; relationship_type: string; rejection_reason: string; discovery_origin: 'work_grounded' | 'research_led' | null; research_path: string | null; research_questions: string[]; initial_validation_outcome: string | null; recovery_attempt: Record<string, unknown>; final_validation_outcome: string | null; automated_evidence_status: 'unverified' | 'partially_supported'; human_review_status: 'pending' | 'kept' | 'dismissed'; human_review_note: string | null; review_history: Record<string, unknown>[]; kept_concept_id: number | null; evidence_review_detail: string | null; last_evaluated_at: string | null; candidate: Record<string, unknown>; validation: Record<string, unknown>; sources: FindingSource[]; superseded_at: string | null; created_at: string }
-type Enrichment = { status: 'not_researched' | 'researched' | 'needs_confirmation'; resolved_title: string | null; creator: string | null; release_info: string | null; identity_summary: string | null; confirmation_question: string | null; researched_at: string | null; sources: ResearchSource[]; concepts: ItemConcept[]; rejected_leads: RejectedFinding[] }
+type RejectedFinding = { id: number; item_id: number; item_title: string; item_kind: Kind; name: string; stage: 'research_problem' | 'concept_candidate'; proposed_definition: string; motivating_detail: string; proposed_relationship: string; relationship_type: string; rejection_reason: string; discovery_origin: 'work_grounded' | 'research_led' | null; research_path: string | null; research_questions: string[]; initial_validation_outcome: string | null; recovery_attempt: Record<string, unknown>; final_validation_outcome: string | null; automated_evidence_status: 'unverified' | 'partially_supported'; human_review_status: 'pending' | 'kept' | 'dismissed'; human_review_note: string | null; review_history: Record<string, unknown>[]; kept_concept_id: number | null; evidence_review_detail: string | null; last_evaluated_at: string | null; candidate: Record<string, unknown>; validation: Record<string, unknown>; sources: FindingSource[]; superseded_at: string | null; concept_classification: 'established_concept' | 'grounded_interpretation' | 'speculative_connection' | null; evidence_form: 'quotation' | 'paraphrase' | null; interested: boolean; interest_note: string | null; interested_at: string | null; created_at: string }
+type IdentityCandidate = { candidate_id: string; title: string; creator: string; release_year: number | null; media_type: Kind; description: string; confidence: number; source_ids: string[] }
+type Enrichment = { status: 'not_researched' | 'researched' | 'needs_confirmation'; resolved_title: string | null; creator: string | null; release_info: string | null; identity_summary: string | null; confirmation_question: string | null; identity_status: 'unresolved' | 'ambiguous' | 'confirmed' | 'not_applicable'; identity_key: string | null; resolved_media_type: Kind | null; identity_confidence: number | null; identity_candidates: IdentityCandidate[]; confirmed_at: string | null; researched_at: string | null; sources: ResearchSource[]; concepts: ItemConcept[]; rejected_leads: RejectedFinding[] }
 type Sidequest = { id: number; item_a_id: number; item_b_id: number; item_a_title: string; item_b_title: string; title: string; connection: string; bridge: string; why_interesting: string; where_it_breaks: string; new_question: string; evidence_status: string; concepts_used: string[]; evidence: string[]; created_at: string }
 
-const kinds: Kind[] = ['book', 'movie', 'podcast', 'article', 'concept', 'question', 'thought']
-const icons: Record<Kind, string> = { book: '📚', movie: '🎬', podcast: '🎧', article: '📰', concept: '💡', question: '❓', thought: '✨' }
-const labels: Record<Kind, string> = { book: 'Book', movie: 'Movie', podcast: 'Podcast', article: 'Article', concept: 'Concept', question: 'Question', thought: 'Random thought' }
+const kinds: Kind[] = ['book', 'movie', 'tv_series', 'podcast', 'article', 'concept', 'question', 'thought']
+const icons: Record<Kind, string> = { book: '📚', movie: '🎬', tv_series: '📺', podcast: '🎧', article: '📰', concept: '💡', question: '❓', thought: '✨' }
+const labels: Record<Kind, string> = { book: 'Book', movie: 'Movie', tv_series: 'TV Series', podcast: 'Podcast', article: 'Article', concept: 'Concept', question: 'Question', thought: 'Random thought' }
 const spineColors = ['#9f493e', '#426359', '#c48245', '#5d617d', '#846244', '#66754c', '#764c59', '#3f6475']
 const coverPalettes = [
   ['#e96b4a', '#301e32'], ['#e7bd57', '#253e48'], ['#78a79a', '#202e3b'], ['#c47d96', '#3d2441'],
   ['#d6d0b8', '#963f32'], ['#7788aa', '#241e30'], ['#d99959', '#394a38'], ['#a4c5cc', '#733d4b'],
 ]
-const empty = { kind: 'book' as Kind, title: '', note: '', url: '' }
+const empty = { kind: 'book' as Kind, title: '', note: '', url: '', creator: '', release_year: '' }
 
 async function responseError(response: Response, fallback: string) {
   try {
@@ -31,7 +32,7 @@ async function responseError(response: Response, fallback: string) {
   return fallback
 }
 
-function App() {
+export function App() {
   const [items, setItems] = useState<Item[]>([])
   const [form, setForm] = useState(empty)
   const [editing, setEditing] = useState<number | null>(null)
@@ -101,7 +102,7 @@ function App() {
       const response = await fetch(editing === null ? '/api/items' : `/api/items/${editing}`, {
         method: editing === null ? 'POST' : 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: form.kind, title: form.title.trim(), note: form.note || null, url: form.url || null }),
+        body: JSON.stringify({ kind: form.kind, title: form.title.trim(), note: form.note || null, url: form.url || null, creator: form.creator || null, release_year: form.release_year ? Number(form.release_year) : null }),
       })
       if (!response.ok) throw new Error(await responseError(response, 'Could not save item'))
       const message = editing === null ? 'Curiosity saved.' : 'Changes saved.'
@@ -119,7 +120,7 @@ function App() {
 
   function edit(item: Item) {
     setEditing(item.id)
-    setForm({ kind: item.kind, title: item.title, note: item.note || '', url: item.url || '' })
+    setForm({ kind: item.kind, title: item.title, note: item.note || '', url: item.url || '', creator: item.creator || '', release_year: item.release_year ? String(item.release_year) : '' })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -191,20 +192,22 @@ function App() {
   )
   const books = visible.filter(item => item.kind === 'book')
   const movies = visible.filter(item => item.kind === 'movie')
+  const series = visible.filter(item => item.kind === 'tv_series')
+  const screenTitles = filter === 'movie' ? movies : filter === 'tv_series' ? series : [...movies, ...series]
   const podcasts = visible.filter(item => item.kind === 'podcast')
   const articles = visible.filter(item => item.kind === 'article')
   const concepts = visible.filter(item => item.kind === 'concept')
   const questions = visible.filter(item => item.kind === 'question')
   const thoughts = visible.filter(item => item.kind === 'thought')
   const selectedBookItem = books.find(book => book.id === selectedBook) || null
-  const selectedMovieItem = movies.find(movie => movie.id === selectedMovie) || null
+  const selectedMovieItem = screenTitles.find(movie => movie.id === selectedMovie) || null
   const selectedPodcastItem = podcasts.find(podcast => podcast.id === selectedPodcast) || null
   const selectedArticleItem = articles.find(article => article.id === selectedArticle) || null
   const selectedConceptItem = concepts.find(concept => concept.id === selectedConcept) || null
   const selectedQuestionItem = questions.find(question => question.id === selectedQuestion) || null
   const selectedThoughtItem = thoughts.find(thought => thought.id === selectedThought) || null
   const selectedItem = selectedBookItem || selectedMovieItem || selectedPodcastItem || selectedArticleItem || selectedConceptItem || selectedQuestionItem || selectedThoughtItem
-  const deferredCount = visible.length - books.length - movies.length - podcasts.length - articles.length - concepts.length - questions.length - thoughts.length
+  const deferredCount = visible.length - books.length - movies.length - series.length - podcasts.length - articles.length - concepts.length - questions.length - thoughts.length
 
   return <main>
     <header>
@@ -225,6 +228,7 @@ function App() {
         <textarea id="note" rows={3} placeholder="A fleeting thought is enough." value={form.note} onChange={event => setForm({ ...form, note: event.target.value })} />
         <label htmlFor="url">Link <small>Optional</small></label>
         <input id="url" type="url" placeholder="https://…" value={form.url} onChange={event => setForm({ ...form, url: event.target.value })} />
+        <details className="capture-details"><summary>More identifying details</summary><div className="metadata-fields"><label htmlFor="creator">Creator <small>Optional</small></label><input id="creator" maxLength={300} placeholder="Author, director, or host" value={form.creator} onChange={event => setForm({ ...form, creator: event.target.value })} /><label htmlFor="release-year">Release year <small>Optional</small></label><input id="release-year" type="number" min="1000" max="3000" placeholder="2009" value={form.release_year} onChange={event => setForm({ ...form, release_year: event.target.value })} /></div></details>
         <div className="actions">
           <button className="primary" disabled={busy || !form.title.trim()}>{busy ? 'Saving…' : editing === null ? '＋ Save curiosity' : 'Save changes'}</button>
           {editing !== null && <button type="button" className="secondary" onClick={() => { setEditing(null); setForm(empty) }}>Cancel</button>}
@@ -265,13 +269,13 @@ function App() {
             {selectedBookItem && <BookDetail item={selectedBookItem} onClose={() => setSelectedBook(null)} onEdit={edit} onRemove={remove} />}
           </section> : filter === 'book' && <CollectionEmpty icon="📖" message="No books on this shelf yet." action="Add your first book" onAction={() => startCapture('book')} />)}
 
-          {(filter === 'all' || filter === 'movie') && (movies.length > 0 ? <section className="visual-collection movie-collection">
-            <div className="shelf-heading media-heading"><div><span>THE MEDIA SHELF</span><h3>{normalizedQuery ? `${movies.length} matching ${movies.length === 1 ? 'movie' : 'movies'}` : `${movies.length} ${movies.length === 1 ? 'title' : 'titles'}`}</h3></div><p>Choose a case for tonight's feature.</p></div>
-            <div className="media-shelf" aria-label="Movie shelf"><div className="movie-cases">
-              {movies.map(movie => <MovieCase key={movie.id} item={movie} selected={selectedMovie === movie.id} onSelect={() => setSelectedMovie(selectedMovie === movie.id ? null : movie.id)} />)}
+          {(filter === 'all' || filter === 'movie' || filter === 'tv_series') && (screenTitles.length > 0 ? <section className="visual-collection movie-collection">
+            <div className="shelf-heading media-heading"><div><span>THE MEDIA SHELF</span><h3>{normalizedQuery ? `${screenTitles.length} matching screen ${screenTitles.length === 1 ? 'title' : 'titles'}` : `${screenTitles.length} ${screenTitles.length === 1 ? 'title' : 'titles'}`}</h3></div><p>Films and series, kept distinct on one shelf.</p></div>
+            <div className="media-shelf" aria-label="Movie and TV shelf"><div className="movie-cases">
+              {screenTitles.map(movie => <MovieCase key={movie.id} item={movie} selected={selectedMovie === movie.id} onSelect={() => setSelectedMovie(selectedMovie === movie.id ? null : movie.id)} />)}
             </div><div className="media-shelf-edge" /></div>
             {selectedMovieItem && <MovieDetail item={selectedMovieItem} onClose={() => setSelectedMovie(null)} onEdit={edit} onRemove={remove} />}
-          </section> : filter === 'movie' && <CollectionEmpty icon="🎞️" message="No movies on this shelf yet." action="Add your first movie" onAction={() => startCapture('movie')} />)}
+          </section> : (filter === 'movie' || filter === 'tv_series') && <CollectionEmpty icon={filter === 'tv_series' ? '📺' : '🎞️'} message={`No ${filter === 'tv_series' ? 'TV series' : 'movies'} on this shelf yet.`} action={`Add your first ${filter === 'tv_series' ? 'series' : 'movie'}`} onAction={() => startCapture(filter)} />)}
 
           {(filter === 'all' || filter === 'podcast') && (podcasts.length > 0 ? <section className="visual-collection podcast-collection">
             <div className="shelf-heading radio-heading"><div><span>ON THE AIR</span><h3>{normalizedQuery ? `${podcasts.length} matching ${podcasts.length === 1 ? 'show' : 'shows'}` : `${podcasts.length} ${podcasts.length === 1 ? 'recording' : 'recordings'}`}</h3></div><p>Press play on something worth hearing.</p></div>
@@ -345,7 +349,7 @@ function RoomShell({ items, query, focusedZone, onFocus }: { items: Item[]; quer
   const resultCount = (kind: Kind) => items.filter(item => item.kind === kind && matchesRoomQuery(item)).length
   const zoneClass = (kind: Kind) => `room-zone zone-${kind} ${focusedZone === kind ? 'active' : ''} ${normalizedRoomQuery && resultCount(kind) === 0 ? 'no-match' : ''}`
   const roomBooks = roomItems('book', 18)
-  const roomMovies = roomItems('movie', 5)
+  const roomMovies = [...roomItems('movie', 3), ...roomItems('tv_series', 3)].slice(0, 5)
   const roomPodcasts = roomItems('podcast', 3)
   const roomArticles = roomItems('article', 4)
   const roomConcepts = roomItems('concept', 5)
@@ -382,7 +386,7 @@ function BookDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose: 
 
 function MovieCase({ item, selected, onSelect }: { item: Item; selected: boolean; onSelect: () => void }) {
   const palette = coverPalettes[item.id % coverPalettes.length]
-  const format = item.id % 3 === 0 ? 'VHS' : 'DVD'
+  const format = item.kind === 'tv_series' ? 'TV' : item.id % 3 === 0 ? 'VHS' : 'DVD'
   return <button
     type="button"
     className={`movie-case ${format === 'VHS' ? 'vhs' : ''} ${selected ? 'selected' : ''}`}
@@ -403,11 +407,11 @@ function MovieDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClose:
     <button type="button" className="detail-close" aria-label="Close movie details" onClick={onClose}>×</button>
     <div className="ticket-stub"><span>✦ ASTERISK PICTURES</span><strong>ADMIT ONE</strong><small>{new Date(item.created_at).toLocaleDateString()}</small></div>
     <div className="movie-detail-copy">
-      <span>MOVIE · FROM THE MEDIA SHELF</span>
+      <span>{item.kind === 'tv_series' ? 'TV SERIES' : 'MOVIE'} · FROM THE MEDIA SHELF</span>
       <h3>{item.title}</h3>
       {item.note ? <p>{item.note}</p> : <p className="muted">No personal note yet.</p>}
       {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}
-      <div className="item-actions"><button onClick={() => onEdit(item)}>Edit this movie</button><button onClick={() => void onRemove(item)}>Remove from shelf</button></div>
+      <div className="item-actions"><button onClick={() => onEdit(item)}>Edit this {item.kind === 'tv_series' ? 'series' : 'movie'}</button><button onClick={() => void onRemove(item)}>Remove from shelf</button></div>
     </div>
   </article>
 }
@@ -495,7 +499,7 @@ function ThoughtDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClos
   </article>
 }
 
-function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onClose: () => void; onError: (message: string) => void; onChange: (count: number) => void }) {
+export function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onClose: () => void; onError: (message: string) => void; onChange: (count: number) => void }) {
   const [concepts, setConcepts] = useState<ItemConcept[]>([])
   const [loading, setLoading] = useState(true)
   const [extracting, setExtracting] = useState(false)
@@ -503,7 +507,6 @@ function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onC
   const [category, setCategory] = useState<ItemConcept['category']>('personal')
   const [enrichment, setEnrichment] = useState<Enrichment | null>(null)
   const [enriching, setEnriching] = useState(false)
-  const [identityHint, setIdentityHint] = useState('')
 
   async function load() {
     setLoading(true)
@@ -534,12 +537,11 @@ function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onC
     finally { setExtracting(false) }
   }
 
-  async function enrich(identityHintOverride = '') {
+  async function enrich() {
     setEnriching(true)
     onError('')
     try {
-      const hint = identityHintOverride.trim()
-      const response = await fetch(`/api/items/${item.id}/enrich`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ identity_hint: hint || null }) })
+      const response = await fetch(`/api/items/${item.id}/enrich`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       if (!response.ok) throw new Error(await responseError(response, 'Research could not be completed'))
       const researched: Enrichment = await response.json()
       setEnrichment(researched)
@@ -547,6 +549,26 @@ function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onC
       onChange(researched.concepts.length)
     } catch (caught) { onError(caught instanceof Error ? caught.message : 'Research could not be completed') }
     finally { setEnriching(false) }
+  }
+
+  async function confirmIdentity(candidateId: string) {
+    setEnriching(true)
+    onError('')
+    try {
+      const response = await fetch(`/api/items/${item.id}/identity/confirm`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidate_id: candidateId }) })
+      if (!response.ok) throw new Error(await responseError(response, 'Could not confirm this work'))
+      setEnrichment(await response.json())
+    } catch (caught) { onError(caught instanceof Error ? caught.message : 'Could not confirm this work') }
+    finally { setEnriching(false) }
+  }
+
+  async function resetIdentity() {
+    const response = await fetch(`/api/items/${item.id}/identity`, { method: 'DELETE' })
+    if (!response.ok) { onError(await responseError(response, 'Could not reset identity')); return }
+    const reset: Enrichment = await response.json()
+    setEnrichment(reset)
+    setConcepts(reset.concepts)
+    onChange(reset.concepts.length)
   }
 
   async function add(event: React.FormEvent) {
@@ -579,21 +601,34 @@ function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onC
     await load()
   }
 
+  async function setConceptInterest(concept: ItemConcept) {
+    const response = await fetch(`/api/concepts/${concept.id}/interest`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ interested: !concept.interested, note: null }) })
+    if (!response.ok) { onError(await responseError(response, 'Could not update interest')); return }
+    const updated: ItemConcept = await response.json()
+    setConcepts(current => current.map(entry => entry.id === updated.id ? updated : entry))
+  }
+
+  async function setFindingInterest(finding: RejectedFinding) {
+    const response = await fetch(`/api/rejected-findings/${finding.id}/interest`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ interested: !finding.interested, note: null }) })
+    if (!response.ok) { onError(await responseError(response, 'Could not update interest')); return }
+    await load()
+  }
+
   return <section className="concept-workbench" id="concept-workbench">
     <button className="detail-close" type="button" aria-label="Close concept explorer" onClick={onClose}>×</button>
     <div className="concept-intro"><span>✦ RESEARCH & CONCEPTS</span><h2>{item.title}</h2><p>Research uses real web sources to identify this curiosity and find substantive ideas. Sources and AI interpretations stay separate from your original note. Full spoilers are allowed.</p></div>
     <div className="concept-actions"><button className="primary" type="button" disabled={enriching} onClick={() => void enrich()}>{enriching ? 'Researching the trail…' : enrichment?.status === 'researched' ? '↻ Refresh Research' : '✦ Enrich with Research'}</button><button className="secondary" type="button" disabled={extracting} onClick={() => void extract()}>{extracting ? 'Extracting…' : 'Quick extract without research'}</button></div>
-    {enrichment && enrichment.status !== 'not_researched' && <section className={`research-card ${enrichment.status}`}><div className="research-status"><span>{enrichment.status === 'needs_confirmation' ? 'IDENTITY NEEDS CONFIRMATION' : 'RESEARCHED'}</span>{enrichment.researched_at && <time>{new Date(enrichment.researched_at).toLocaleString()}</time>}</div>{enrichment.status === 'needs_confirmation' ? <><p className="confirmation-question">{enrichment.confirmation_question}</p><div className="identity-confirm"><input aria-label="Identity details" placeholder="Author, director, year, or episode title" value={identityHint} onChange={event => setIdentityHint(event.target.value)} /><button type="button" disabled={!identityHint.trim() || enriching} onClick={() => void enrich(identityHint)}>Confirm & research</button></div></> : <><h3>{enrichment.resolved_title}</h3><p>{[enrichment.creator, enrichment.release_info].filter(Boolean).join(' · ')}</p><p>{enrichment.identity_summary}</p></>}<details><summary>{enrichment.sources.length} research {enrichment.sources.length === 1 ? 'source' : 'sources'}</summary><div className="research-sources">{enrichment.sources.map(source => <article key={source.id}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a><small>{source.publisher} · {source.retrieval_status}</small><p>{source.excerpt}</p></article>)}</div></details></section>}
-    {enrichment && enrichment.rejected_leads.length > 0 && <details className="rejected-leads"><summary>{enrichment.rejected_leads.length} rejected research {enrichment.rejected_leads.length === 1 ? 'finding' : 'findings'} to review</summary>{enrichment.rejected_leads.map(lead => <RejectedFindingCard key={lead.id} finding={lead} onReview={reviewFinding} onReevaluate={reevaluateFinding} />)}</details>}
+    {enrichment && (enrichment.status !== 'not_researched' || enrichment.identity_status === 'confirmed') && <section className={`research-card ${enrichment.status}`}><div className="research-status"><span>{enrichment.identity_status === 'confirmed' ? 'CONFIRMED IDENTITY' : enrichment.status === 'needs_confirmation' ? 'CHOOSE THE RIGHT WORK' : 'RESEARCHED'}</span>{enrichment.researched_at && <time>{new Date(enrichment.researched_at).toLocaleString()}</time>}</div>{enrichment.identity_status === 'ambiguous' || enrichment.identity_status === 'unresolved' ? <>{enrichment.identity_candidates.length > 0 ? <><p className="confirmation-question">{enrichment.confirmation_question}</p><div className="identity-candidates">{enrichment.identity_candidates.map(candidate => <article key={candidate.candidate_id}><strong>{candidate.title}</strong><span>{[candidate.creator, candidate.release_year, labels[candidate.media_type]].filter(Boolean).join(' · ')}</span><p>{candidate.description}</p><button type="button" disabled={enriching} onClick={() => void confirmIdentity(candidate.candidate_id)}>This is the one</button></article>)}</div></> : <div className="identity-actions"><p>Earlier AI findings are preserved in history but hidden until this work is identified correctly.</p><button type="button" className="primary" disabled={enriching} onClick={() => void enrich()}>Resolve exact work</button></div>}</> : <><h3>{enrichment.resolved_title}</h3><p>{[enrichment.creator, enrichment.release_info, enrichment.resolved_media_type ? labels[enrichment.resolved_media_type] : null].filter(Boolean).join(' · ')}</p><p>{enrichment.identity_summary}</p>{enrichment.identity_status === 'confirmed' && <div className="identity-actions"><button type="button" onClick={() => void resetIdentity()}>Correct this match</button>{enrichment.status !== 'researched' && <button type="button" className="primary" disabled={enriching} onClick={() => void enrich()}>Research this work</button>}</div>}</>}<details><summary>{enrichment.sources.length} current research {enrichment.sources.length === 1 ? 'source' : 'sources'}</summary><div className="research-sources">{enrichment.sources.map(source => <article key={source.id}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a><small>{source.publisher} · {source.retrieval_status}</small><p>{source.excerpt}</p></article>)}</div></details></section>}
+    {enrichment && enrichment.rejected_leads.length > 0 && <details className="rejected-leads"><summary>{enrichment.rejected_leads.length} research {enrichment.rejected_leads.length === 1 ? 'finding' : 'findings'} to review</summary>{enrichment.rejected_leads.map(lead => <RejectedFindingCard key={lead.id} finding={lead} onReview={reviewFinding} onReevaluate={reevaluateFinding} onInterest={setFindingInterest} />)}</details>}
     {loading ? <p className="muted">Opening the concept drawer…</p> : concepts.length === 0 ? <div className="concept-empty">No concepts yet. Ask Asterisk to explore, or add one in your own words.</div> : <div className="concept-list">{concepts.map(concept => <article className={`concept-chip ${concept.origin}`} key={concept.id}>
-      <div><span>{concept.origin === 'user' ? 'YOUR CONCEPT' : concept.origin === 'user_kept' ? `USER-KEPT · ${concept.evidence_status === 'user_kept_partially_supported' ? 'PARTIALLY SUPPORTED' : 'UNVERIFIED'}` : concept.discovery_origin === 'research_led' ? 'FOUND WHILE EXPLORING' : 'FROM THE WORK'} · {concept.label_kind === 'established_term' ? 'established term' : concept.label_kind === 'descriptive_label' ? 'descriptive idea' : concept.level || concept.category}{concept.domain ? ` · ${concept.domain}` : ''}</span><strong>{concept.name}</strong>{(concept.definition || concept.explanation) && <p>{concept.definition || concept.explanation}</p>}{concept.mechanism && <p><b>How it works:</b> {concept.mechanism}</p>}{concept.user_note && <p className="user-review-note"><b>Your note:</b> {concept.user_note}</p>}{concept.discovery_origin === 'research_led' && concept.research_path && <p className="research-path"><b>How we found it:</b> {concept.research_path}</p>}{(concept.relationship_evidence || concept.relationship) && <p className="concept-relationship"><b>{concept.relationship_type || 'Relationship'}:</b> {concept.relationship_evidence || concept.relationship}</p>}{concept.curiosity_hook && <p className="curiosity-hook"><b>Follow the thread:</b> {concept.curiosity_hook}</p>}{concept.source_support.length > 0 && enrichment && <details className="concept-evidence"><summary>Supporting evidence</summary>{concept.source_support.map(link => { const source = enrichment.sources.find(entry => entry.id === link.source_id); return source ? <a key={`${source.id}-${link.support_kind}`} href={source.url} target="_blank" rel="noopener noreferrer"><small>{link.support_kind.split('_and_').join(' + ').split('_').join(' ').toUpperCase()}</small>{source.title} ↗</a> : null })}</details>}{concept.origin === 'user_kept' && <p className="human-review-warning">Interest, not proof. This finding remains outside verified evidence workflows.</p>}{concept.recovery_attempt && <details className="concept-recovery"><summary>Evidence recovery record</summary><p>{String(concept.recovery_attempt.outcome || concept.recovery_attempt.recovery_reason || 'Recovery attempt recorded.')}</p></details>}{concept.concept_verification && <small>Concept: {concept.concept_verification} · Relationship: {concept.relationship_verification}</small>}</div>
-      <button type="button" aria-label={`Remove ${concept.name}`} onClick={() => void remove(concept)}>×</button>
+      <div><span>{concept.origin === 'user' ? 'YOUR CONCEPT' : concept.origin === 'user_kept' ? `USER-KEPT · ${concept.evidence_status === 'user_kept_partially_supported' ? 'PARTIALLY SUPPORTED' : 'UNVERIFIED'}` : concept.discovery_origin === 'research_led' ? 'FOUND WHILE EXPLORING' : 'FROM THE WORK'} · {concept.concept_classification === 'established_concept' ? 'established concept' : concept.concept_classification === 'grounded_interpretation' ? 'grounded interpretation' : concept.concept_classification === 'speculative_connection' ? 'speculative connection' : concept.level || concept.category}{concept.domain ? ` · ${concept.domain}` : ''}</span><strong>{concept.name}</strong>{(concept.definition || concept.explanation) && <p>{concept.definition || concept.explanation}</p>}{concept.mechanism && <p><b>How it works:</b> {concept.mechanism}</p>}{concept.user_note && <p className="user-review-note"><b>Your note:</b> {concept.user_note}</p>}{concept.discovery_origin === 'research_led' && concept.research_path && <p className="research-path"><b>How we found it:</b> {concept.research_path}</p>}{(concept.relationship_evidence || concept.relationship) && <p className="concept-relationship"><b>{concept.relationship_type || 'Relationship'}:</b> {concept.relationship_evidence || concept.relationship}</p>}{concept.curiosity_hook && <p className="curiosity-hook"><b>Follow the thread:</b> {concept.curiosity_hook}</p>}{concept.source_support.length > 0 && enrichment && <details className="concept-evidence"><summary>Supporting evidence · {concept.evidence_form === 'paraphrase' ? 'cited paraphrase' : 'checked quotation'}</summary>{concept.source_support.map(link => { const source = enrichment.sources.find(entry => entry.id === link.source_id); return source ? <a key={`${source.id}-${link.support_kind}`} href={source.url} target="_blank" rel="noopener noreferrer"><small>{link.support_kind.split('_and_').join(' + ').split('_').join(' ').toUpperCase()}</small>{source.title} ↗</a> : null })}</details>}{concept.origin === 'user_kept' && <p className="human-review-warning">Interest, not proof. This finding remains outside verified evidence workflows.</p>}{concept.recovery_attempt && <details className="concept-recovery"><summary>Evidence recovery record</summary><p>{String(concept.recovery_attempt.outcome || concept.recovery_attempt.recovery_reason || 'Recovery attempt recorded.')}</p></details>}{concept.concept_verification && <small>Concept evidence: {concept.concept_verification} · Work relationship: {concept.relationship_verification}</small>}</div>
+      <div className="concept-card-actions"><button type="button" className={concept.interested ? 'interested' : ''} aria-pressed={concept.interested} onClick={() => void setConceptInterest(concept)}>{concept.interested ? '★ Interested' : '☆ Interested'}</button><button type="button" aria-label={`Remove ${concept.name}`} onClick={() => void remove(concept)}>×</button></div>
     </article>)}</div>}
     <form className="manual-concept" onSubmit={add}><label htmlFor="manual-concept-name">Add a concept for Sidequests</label><div><input id="manual-concept-name" maxLength={120} placeholder="A theme, principle, or underlying mechanism" value={name} onChange={event => setName(event.target.value)} /><select aria-label="Concept category" value={category} onChange={event => setCategory(event.target.value as ItemConcept['category'])}><option value="personal">Personal</option><option value="general">General theme</option><option value="mechanism">Mechanism</option></select><button disabled={!name.trim()}>Add concept</button></div></form>
   </section>
 }
 
-function RejectedFindingCard({ finding, onReview, onReevaluate }: { finding: RejectedFinding; onReview: (finding: RejectedFinding, decision: 'keep' | 'dismiss' | 'pending', note: string) => Promise<void>; onReevaluate: (finding: RejectedFinding) => Promise<void> }) {
+export function RejectedFindingCard({ finding, onReview, onReevaluate, onInterest }: { finding: RejectedFinding; onReview: (finding: RejectedFinding, decision: 'keep' | 'dismiss' | 'pending', note: string) => Promise<void>; onReevaluate: (finding: RejectedFinding) => Promise<void>; onInterest: (finding: RejectedFinding) => Promise<void> }) {
   const [note, setNote] = useState(finding.human_review_note || '')
   const [busy, setBusy] = useState(false)
   async function decide(decision: 'keep' | 'dismiss' | 'pending') {
@@ -605,7 +640,7 @@ function RejectedFindingCard({ finding, onReview, onReevaluate }: { finding: Rej
     try { await onReevaluate(finding) } finally { setBusy(false) }
   }
   return <article className={`review-finding ${finding.human_review_status}`}>
-    <div className="review-finding-head"><small>{finding.stage === 'research_problem' ? 'RESEARCH PROBLEM' : finding.discovery_origin === 'research_led' ? 'FOUND WHILE EXPLORING' : 'FROM THE WORK'}{finding.superseded_at ? ' · EARLIER RESEARCH RUN' : ''}</small><span>{finding.human_review_status === 'kept' ? `USER-KEPT · ${finding.automated_evidence_status === 'partially_supported' ? 'PARTIALLY SUPPORTED' : 'UNVERIFIED'}` : finding.human_review_status.toUpperCase()}</span></div>
+    <div className="review-finding-head"><small>{finding.stage === 'research_problem' ? 'RESEARCH PROBLEM' : finding.discovery_origin === 'research_led' ? 'FOUND WHILE EXPLORING' : 'FROM THE WORK'}{finding.concept_classification ? ` · ${finding.concept_classification.split('_').join(' ').toUpperCase()}` : ''}{finding.superseded_at ? ' · EARLIER RESEARCH RUN' : ''}</small><span>{finding.human_review_status === 'kept' ? `USER-KEPT · ${finding.automated_evidence_status === 'partially_supported' ? 'PARTIALLY SUPPORTED' : 'UNVERIFIED'}` : finding.human_review_status.toUpperCase()}</span></div>
     <strong>{finding.name}</strong>
     <p className="finding-origin">Library item: {finding.item_title}</p>
     {finding.proposed_definition && <p>{finding.proposed_definition}</p>}
@@ -616,7 +651,7 @@ function RejectedFindingCard({ finding, onReview, onReevaluate }: { finding: Rej
     {finding.evidence_review_detail && <p><b>Latest evidence review:</b> {finding.evidence_review_detail}</p>}
     {(finding.initial_validation_outcome || finding.final_validation_outcome) && <details className="automated-audit"><summary>Automated validation record</summary>{finding.initial_validation_outcome && <p><b>Initial:</b> {finding.initial_validation_outcome}</p>}{finding.final_validation_outcome && <p><b>Final:</b> {finding.final_validation_outcome}</p>}{Boolean(finding.recovery_attempt.outcome) && <p><b>Recovery:</b> {String(finding.recovery_attempt.outcome)}</p>}</details>}
     {finding.sources.length > 0 && <details className="finding-sources"><summary>{finding.sources.length} available {finding.sources.length === 1 ? 'source' : 'sources'}</summary>{finding.sources.map((source, index) => <div key={`${source.source_id || source.id}-${index}`}>{source.url ? <a href={source.url} target="_blank" rel="noopener noreferrer">{source.title || source.url} ↗</a> : <strong>{source.title || 'Saved source'}</strong>}{source.excerpt && <p>{source.excerpt}</p>}</div>)}</details>}
-    {finding.stage === 'concept_candidate' && <><textarea rows={2} maxLength={2000} placeholder="Optional note: why do you want to keep or dismiss this?" value={note} onChange={event => setNote(event.target.value)} /><div className="review-actions"><button type="button" disabled={busy || finding.human_review_status === 'kept'} onClick={() => void decide('keep')}>Keep anyway</button><button type="button" disabled={busy || finding.human_review_status === 'dismissed'} onClick={() => void decide('dismiss')}>Dismiss</button>{finding.human_review_status !== 'pending' && <button type="button" disabled={busy} onClick={() => void decide('pending')}>Undo decision</button>}<button type="button" disabled={busy} onClick={() => void reevaluate()}>Re-evaluate evidence</button></div></>}
+    {finding.stage === 'concept_candidate' && <><textarea rows={2} maxLength={2000} placeholder="Optional note: why do you want to keep or dismiss this?" value={note} onChange={event => setNote(event.target.value)} /><div className="review-actions"><button type="button" className={finding.interested ? 'interested' : ''} disabled={busy} onClick={() => void onInterest(finding)}>{finding.interested ? '★ Interested' : '☆ Interested'}</button><button type="button" disabled={busy || finding.human_review_status === 'kept'} onClick={() => void decide('keep')}>Keep anyway</button><button type="button" disabled={busy || finding.human_review_status === 'dismissed'} onClick={() => void decide('dismiss')}>Dismiss</button>{finding.human_review_status !== 'pending' && <button type="button" disabled={busy} onClick={() => void decide('pending')}>Undo decision</button>}<button type="button" disabled={busy} onClick={() => void reevaluate()}>Re-evaluate evidence</button></div><small>Interested records curiosity; Keep anyway makes this exploratory finding available to Sidequests. Neither changes its evidence status.</small></>}
   </article>
 }
 
@@ -644,4 +679,5 @@ function CollectionEmpty({ icon, message, action, onAction }: { icon: string; me
   return <div className="empty collection-empty"><span>{icon}</span><strong>{message}</strong><button type="button" onClick={onAction}>{action}</button></div>
 }
 
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
+const root = document.getElementById('root')
+if (root) createRoot(root).render(<React.StrictMode><App /></React.StrictMode>)

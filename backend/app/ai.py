@@ -30,6 +30,8 @@ from .prompts import (
     recovery_research_input,
     understanding_input,
     validation_input,
+    IDENTITY_SYSTEM_PROMPT,
+    identity_input,
 )
 
 
@@ -51,6 +53,25 @@ class ExtractedConcept(BaseModel):
 class ConceptExtraction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     concepts: list[ExtractedConcept] = Field(max_length=6)
+
+
+class EntityCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate_id: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=300)
+    creator: str = Field(max_length=300)
+    release_year: int | None = Field(default=None, ge=1000, le=3000)
+    media_type: Literal["book", "movie", "tv_series", "podcast", "article"]
+    description: str = Field(min_length=1, max_length=900)
+    confidence: float = Field(ge=0, le=1)
+    source_ids: list[str] = Field(min_length=1, max_length=5)
+
+
+class EntityResolution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["confirmed", "ambiguous", "unresolved"]
+    reason: str = Field(min_length=1, max_length=700)
+    candidates: list[EntityCandidate] = Field(max_length=5)
 
 
 class EnrichedConcept(BaseModel):
@@ -83,6 +104,8 @@ class WorkUnderstanding(BaseModel):
     creator: str = Field(max_length=300)
     release_info: str = Field(max_length=200)
     identity_summary: str = Field(max_length=900)
+    identity_matches_sources: bool = True
+    identity_mismatch_reason: str = Field(default="", max_length=700)
     events_and_problems: list[str] = Field(max_length=8)
     phenomena_and_processes: list[str] = Field(max_length=8)
     dilemmas_and_decisions: list[str] = Field(max_length=8)
@@ -109,6 +132,7 @@ class EvidenceReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_id: str = Field(min_length=1, max_length=60)
     excerpt: str = Field(min_length=1, max_length=900)
+    evidence_form: Literal["quotation", "paraphrase"] = "quotation"
 
 
 class EvidenceConceptCandidate(BaseModel):
@@ -119,6 +143,7 @@ class EvidenceConceptCandidate(BaseModel):
     discovery_source_ids: list[str] = Field(min_length=1, max_length=5)
     research_path: str = Field(min_length=1, max_length=900)
     label_kind: Literal["established_term", "descriptive_label"]
+    concept_classification: Literal["established_concept", "grounded_interpretation", "speculative_connection"] = "established_concept"
     canonical_name: str = Field(min_length=1, max_length=160)
     aliases: list[str] = Field(max_length=8)
     definition: str = Field(min_length=1, max_length=900)
@@ -152,6 +177,7 @@ class ValidatedConcept(BaseModel):
     discovery_source_ids: list[str] = Field(max_length=5)
     research_path: str = Field(max_length=900)
     label_kind: Literal["established_term", "descriptive_label"]
+    concept_classification: Literal["established_concept", "grounded_interpretation", "speculative_connection"] = "established_concept"
     canonical_name: str = Field(max_length=160)
     aliases: list[str] = Field(max_length=8)
     level: Literal["concept", "mechanism"]
@@ -164,6 +190,7 @@ class ValidatedConcept(BaseModel):
     concept_verification: Literal["verified", "partially_verified", "unverified"]
     relationship_verification: Literal["verified", "supported_interpretation", "unverified"]
     confidence: float = Field(ge=0, le=1)
+    mechanism_defensibility: Literal["defensible", "uncertain", "unsupported"] = "defensible"
     relationship_source_ids: list[str] = Field(max_length=5)
     curiosity_hook: str | None = Field(max_length=500)
 
@@ -217,13 +244,24 @@ class OpenRouterClient:
     def _structured(self, system: str, user: str, schema: type[BaseModel], name: str, max_tokens: int) -> BaseModel:
         if not self.api_key:
             raise AIConfigurationError("OPENROUTER_API_KEY is not configured. Add it to your local .env file and restart Asterisk.")
+        schema_json = schema.model_json_schema()
+        def require_declared_properties(node: object) -> None:
+            if isinstance(node, dict):
+                if isinstance(node.get("properties"), dict):
+                    node["required"] = list(node["properties"])
+                for value in node.values():
+                    require_declared_properties(value)
+            elif isinstance(node, list):
+                for value in node:
+                    require_declared_properties(value)
+        require_declared_properties(schema_json)
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "response_format": {"type": "json_schema", "json_schema": {"name": name, "schema": schema.model_json_schema(), "strict": True}},
+            "response_format": {"type": "json_schema", "json_schema": {"name": name, "schema": schema_json, "strict": True}},
             "provider": {"require_parameters": True},
             "max_tokens": max_tokens,
         }
@@ -329,6 +367,9 @@ class OpenRouterClient:
 
     def extract_concepts(self, item: dict[str, object]) -> ConceptExtraction:
         return self._structured(CONCEPT_SYSTEM_PROMPT, concept_input(item), ConceptExtraction, "concept_extraction", 900)  # type: ignore[return-value]
+
+    def resolve_identity(self, item: dict[str, object], synthesis: str, sources: list[dict[str, str]]) -> EntityResolution:
+        return self._structured(IDENTITY_SYSTEM_PROMPT, identity_input(item, synthesis, sources), EntityResolution, "entity_resolution", 1400)  # type: ignore[return-value]
 
     def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
         return self._structured(CONNECTION_SYSTEM_PROMPT, connection_input(pairs), CandidateBatch, "sidequest_candidates", 2200)  # type: ignore[return-value]

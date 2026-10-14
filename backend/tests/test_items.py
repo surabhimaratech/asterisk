@@ -6,8 +6,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ValidatedConcept, WorkUnderstanding
-from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, app, get_ai_client, get_db, resolve_canonical_concept
+from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ValidatedConcept, WorkUnderstanding
+from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, app, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept
 from app.quality import candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from app.research import ResearchPacket, RetrievedSource, get_research_provider
 
@@ -130,6 +130,13 @@ class FakeAI:
             raise AIProviderError("Provider unavailable")
         return ConceptExtraction(concepts=self.extracted)
 
+    def resolve_identity(self, item: dict[str, object], _synthesis: str, sources: list[dict[str, str]]) -> EntityResolution:
+        return EntityResolution(status="confirmed", reason="Exact title and media type match.", candidates=[EntityCandidate(
+            candidate_id="exact-work", title=str(item["title"]), creator="Test creator", release_year=2021,
+            media_type=str(item["kind"]), description="The exact saved work.", confidence=0.98,
+            source_ids=[sources[0]["source_id"]],
+        )])
+
     def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
         a = pairs[0]["item_a"]["id"]  # type: ignore[index]
         b = pairs[0]["item_b"]["id"]  # type: ignore[index]
@@ -184,8 +191,8 @@ class FakeResearch:
 
 
 class AmbiguousAI(FakeAI):
-    def understand_work(self, _item: dict[str, object], _synthesis: str, _sources: list[dict[str, str]]) -> WorkUnderstanding:
-        return WorkUnderstanding(ambiguous_identity=True, confirmation_question="Which edition or creator did you mean?", resolved_title="", creator="", release_info="", identity_summary="", events_and_problems=[], phenomena_and_processes=[], dilemmas_and_decisions=[], systems_and_causal_relations=[])
+    def resolve_identity(self, item: dict[str, object], _synthesis: str, sources: list[dict[str, str]]) -> EntityResolution:
+        return EntityResolution(status="ambiguous", reason="Which edition or creator did you mean?", candidates=[EntityCandidate(candidate_id="first", title=str(item["title"]), creator="Creator One", release_year=2020, media_type=str(item["kind"]), description="First plausible work.", confidence=0.75, source_ids=[sources[0]["source_id"]]), EntityCandidate(candidate_id="second", title=str(item["title"]), creator="Creator Two", release_year=2021, media_type=str(item["kind"]), description="Second plausible work.", confidence=0.73, source_ids=[sources[0]["source_id"]])])
 
 
 class RejectingAI(FakeAI):
@@ -294,7 +301,7 @@ def test_research_enrichment_persists_sources_and_preserves_manual_concepts(clie
     assert any(concept["id"] == manual["id"] for concept in second.json()["concepts"])
 
 
-def test_ambiguous_refresh_requests_confirmation_without_erasing_existing_research(client: TestClient) -> None:
+def test_confirmed_identity_is_reused_on_refresh(client: TestClient) -> None:
     item_id = create_item(client).json()["id"]
     app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
     app.dependency_overrides[get_ai_client] = lambda: FakeAI()
@@ -304,8 +311,8 @@ def test_ambiguous_refresh_requests_confirmation_without_erasing_existing_resear
     ambiguous = client.post(f"/api/items/{item_id}/enrich")
 
     assert ambiguous.status_code == 200
-    assert ambiguous.json()["status"] == "needs_confirmation"
-    assert ambiguous.json()["confirmation_question"] == "Which edition or creator did you mean?"
+    assert ambiguous.json()["status"] == "researched"
+    assert ambiguous.json()["identity_status"] == "confirmed"
     assert len(ambiguous.json()["sources"]) == 2
     assert any(concept["origin"] == "ai" for concept in ambiguous.json()["concepts"])
 
@@ -562,6 +569,176 @@ def test_llm_response_models_reject_extra_fields_and_excess_concepts() -> None:
         ConceptExtraction.model_validate({"concepts": concepts})
 
 
+class NamedWorkAI(FakeAI):
+    def resolve_identity(self, item: dict[str, object], _synthesis: str, sources: list[dict[str, str]]) -> EntityResolution:
+        source_id = sources[0]["source_id"]
+        if item["title"] == "Castle":
+            candidates = [
+                EntityCandidate(candidate_id="argentine-film", title="The Castle", creator="Martín Benchimol", release_year=2023, media_type="movie", description="An Argentine documentary film.", confidence=0.84, source_ids=[source_id]),
+                EntityCandidate(candidate_id="abc-series", title="Castle", creator="Andrew W. Marlowe", release_year=2009, media_type="tv_series", description="The American crime comedy-drama series featuring Richard Castle and Kate Beckett.", confidence=0.98, source_ids=[source_id]),
+            ]
+        else:
+            candidates = [
+                EntityCandidate(candidate_id="original-series", title="Game of Thrones", creator="David Benioff and D. B. Weiss", release_year=2011, media_type="tv_series", description="The original HBO television series.", confidence=0.99, source_ids=[source_id]),
+                EntityCandidate(candidate_id="prequel", title="Game of Thrones: Aegon's Conquest", creator="HBO", release_year=2027, media_type="tv_series", description="A separate prequel project.", confidence=0.65, source_ids=[source_id]),
+            ]
+        return EntityResolution(status="confirmed", reason="One exact title and media-type match.", candidates=candidates)
+
+
+@pytest.mark.parametrize(("title", "expected_creator"), [("Castle", "Andrew W. Marlowe"), ("Game of Thrones", "David Benioff and D. B. Weiss")])
+def test_entity_resolution_prefers_exact_tv_series_and_rejects_namesakes(client: TestClient, title: str, expected_creator: str) -> None:
+    item_id = create_item(client, kind="tv_series", title=title).json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+    app.dependency_overrides[get_ai_client] = lambda: NamedWorkAI()
+
+    response = client.post(f"/api/items/{item_id}/identity/resolve")
+
+    assert response.status_code == 200
+    assert response.json()["identity_status"] == "confirmed"
+    assert response.json()["resolved_title"] == title
+    assert response.json()["creator"] == expected_creator
+
+
+def test_research_stops_when_sources_do_not_match_confirmed_identity(client: TestClient) -> None:
+    class MismatchedSourcesAI(FakeAI):
+        def understand_work(self, item: dict[str, object], synthesis: str, sources: list[dict[str, str]]) -> WorkUnderstanding:
+            understanding = super().understand_work(item, synthesis, sources)
+            return understanding.model_copy(update={"identity_matches_sources": False, "identity_mismatch_reason": "Sources concern a similarly named prequel."})
+
+    item_id = create_item(client, kind="tv_series", title="Game of Thrones").json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+    app.dependency_overrides[get_ai_client] = lambda: MismatchedSourcesAI()
+    response = client.post(f"/api/items/{item_id}/enrich")
+    assert response.status_code == 502
+    assert "similarly named prequel" in response.json()["detail"]
+    assert client.get(f"/api/items/{item_id}/concepts").json() == []
+
+
+def test_ambiguous_identity_requires_choice_and_confirmation_persists(client: TestClient) -> None:
+    item_id = create_item(client, kind="book", title="The Echo").json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+    ambiguous_ai = AmbiguousAI()
+    app.dependency_overrides[get_ai_client] = lambda: ambiguous_ai
+
+    unresolved = client.post(f"/api/items/{item_id}/enrich")
+    assert unresolved.status_code == 200
+    assert unresolved.json()["status"] == "needs_confirmation"
+    assert len(unresolved.json()["identity_candidates"]) == 2
+
+    confirmed = client.post(f"/api/items/{item_id}/identity/confirm", json={"candidate_id": "second"})
+    assert confirmed.status_code == 200
+    assert confirmed.json()["identity_status"] == "confirmed"
+    assert confirmed.json()["creator"] == "Creator Two"
+
+    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    researched = client.post(f"/api/items/{item_id}/enrich")
+    assert researched.status_code == 200
+    assert researched.json()["identity_status"] == "confirmed"
+    assert researched.json()["creator"] == "Creator Two"
+
+
+def test_identity_change_retires_ai_findings_but_preserves_user_content(client: TestClient) -> None:
+    item_id = create_item(client).json()["id"]
+    manual_id = client.post(f"/api/items/{item_id}/concepts", json={"name": "My lens", "category": "personal"}).json()["id"]
+    app.dependency_overrides[get_research_provider] = lambda: FakeResearch()
+    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    assert client.post(f"/api/items/{item_id}/enrich").status_code == 200
+
+    changed = client.patch(f"/api/items/{item_id}", json={"creator": "A corrected creator"})
+
+    assert changed.status_code == 200
+    concepts = client.get(f"/api/items/{item_id}/concepts").json()
+    assert [concept["id"] for concept in concepts] == [manual_id]
+    enrichment = client.get(f"/api/items/{item_id}/enrichment").json()
+    assert enrichment["identity_status"] == "unresolved"
+    assert all(finding["superseded_at"] for finding in enrichment["rejected_leads"])
+
+
+def test_movie_and_tv_series_are_distinct_api_types(client: TestClient) -> None:
+    movie = create_item(client, kind="movie", title="Normal People: The Film").json()
+    series = create_item(client, kind="tv_series", title="Normal People").json()
+    assert movie["kind"] == "movie"
+    assert series["kind"] == "tv_series"
+    assert [item["id"] for item in client.get("/api/items", params={"kind": "tv_series"}).json()] == [series["id"]]
+
+
+def test_additive_migration_preserves_ids_and_only_recategorizes_known_tv_titles(tmp_path) -> None:
+    database = tmp_path / "legacy.db"
+    migration_engine = create_engine(f"sqlite:///{database}")
+    with migration_engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE curiosity_items (id INTEGER PRIMARY KEY, kind VARCHAR(20), title VARCHAR(240), note TEXT, url VARCHAR(2000), created_at DATETIME)")
+        connection.exec_driver_sql("INSERT INTO curiosity_items (id, kind, title) VALUES (1, 'movie', 'Castle'), (2, 'movie', 'An Ambiguous Title'), (3, 'movie', 'Game of Thrones')")
+        for statement in [
+            "CREATE TABLE canonical_concepts (id INTEGER PRIMARY KEY, normalized_name VARCHAR(160), name VARCHAR(160), definition TEXT, domain VARCHAR(120), mechanism TEXT, verification_status VARCHAR(30), created_at DATETIME)",
+            "CREATE TABLE item_concepts (id INTEGER PRIMARY KEY, item_id INTEGER, name VARCHAR(120), category VARCHAR(20), origin VARCHAR(20), explanation TEXT, created_at DATETIME)",
+            "CREATE TABLE sidequests (id INTEGER PRIMARY KEY)", "CREATE TABLE concept_sources (id INTEGER PRIMARY KEY)", "CREATE TABLE research_sources (id INTEGER PRIMARY KEY, item_id INTEGER)",
+            "CREATE TABLE concept_lead_audits (id INTEGER PRIMARY KEY, item_id INTEGER)", "CREATE TABLE item_enrichments (item_id INTEGER PRIMARY KEY, status VARCHAR(30), resolved_title VARCHAR(300), creator VARCHAR(300), release_info VARCHAR(200), identity_summary TEXT, confirmation_question TEXT, researched_at DATETIME)",
+        ]:
+            connection.exec_driver_sql(statement)
+        connection.exec_driver_sql("INSERT INTO item_concepts (id, item_id, name, category, origin) VALUES (10, 1, 'Old AI finding', 'general', 'ai')")
+        connection.exec_driver_sql("INSERT INTO research_sources (id, item_id) VALUES (20, 1)")
+        connection.exec_driver_sql("INSERT INTO concept_lead_audits (id, item_id) VALUES (30, 1)")
+        connection.exec_driver_sql("INSERT INTO item_enrichments (item_id, status) VALUES (1, 'researched')")
+    migrate_additive_columns(migration_engine, f"sqlite:///{database}")
+    with migration_engine.begin() as connection:
+        rows = connection.exec_driver_sql("SELECT id, kind, title FROM curiosity_items ORDER BY id").fetchall()
+        preserved = connection.exec_driver_sql("SELECT (SELECT count(*) FROM item_concepts WHERE id = 10 AND superseded_at IS NOT NULL), (SELECT count(*) FROM research_sources WHERE id = 20 AND superseded_at IS NOT NULL), (SELECT count(*) FROM concept_lead_audits WHERE id = 30 AND superseded_at IS NOT NULL), (SELECT status FROM item_enrichments WHERE item_id = 1)").fetchone()
+    assert rows == [(1, "tv_series", "Castle"), (2, "movie", "An Ambiguous Title"), (3, "tv_series", "Game of Thrones")]
+    assert preserved == (1, 1, 1, "needs_confirmation")
+
+
+def test_cited_paraphrase_passes_without_exact_phrase_but_fake_quote_fails() -> None:
+    text = {"concept-1": "Researchers describe how observers update possible explanations from incomplete evidence while preserving uncertainty about hidden causes."}
+    base = EvidenceConceptCandidate(candidate_id="interpretation", problem_ids=["p1"], discovery_origin="work_grounded", discovery_source_ids=["concept-1"], research_path="Independent research described provisional inference from incomplete observations and connected it to the work situation.", label_kind="descriptive_label", concept_classification="grounded_interpretation", canonical_name="Reasoning from incomplete traces", aliases=[], definition="A synthesis about provisional inference.", domain="reasoning", mechanism="Observers compare incomplete observations with competing explanations while retaining uncertainty.", concept_evidence=[EvidenceReference(source_id="concept-1", excerpt="Observers retain several possible explanations when evidence is incomplete and the hidden cause remains uncertain.", evidence_form="paraphrase")], curiosity_hook=None, uncertainty="A synthesis, not established terminology.")
+    assert candidate_evidence_rejection(base, text, {"concept-1": "https://example.edu/evidence"}) is None
+    fake_quote = base.model_copy(update={"concept_evidence": [base.concept_evidence[0].model_copy(update={"evidence_form": "quotation"})]})
+    assert "verbatim" in (candidate_evidence_rejection(fake_quote, text, {"concept-1": "https://example.edu/evidence"}) or "")
+
+
+def test_interest_is_independent_from_review_and_evidence_status(client: TestClient) -> None:
+    item_id, finding_id = rejected_finding(client)
+    before = client.get("/api/rejected-findings", params={"item_id": item_id}).json()[0]
+    interested = client.patch(f"/api/rejected-findings/{finding_id}/interest", json={"interested": True, "note": "Follow this thread"})
+    assert interested.status_code == 200
+    assert interested.json()["interested"] is True
+    assert interested.json()["human_review_status"] == before["human_review_status"] == "pending"
+    assert interested.json()["automated_evidence_status"] == before["automated_evidence_status"]
+
+    kept = client.patch(f"/api/rejected-findings/{finding_id}/review", json={"decision": "keep"})
+    concept_id = kept.json()["kept_concept_id"]
+    concept = client.get(f"/api/items/{item_id}/concepts").json()[0]
+    assert concept["id"] == concept_id and concept["interested"] is True
+    undone = client.patch(f"/api/concepts/{concept_id}/interest", json={"interested": False})
+    assert undone.json()["interested"] is False
+    finding = client.get("/api/rejected-findings", params={"item_id": item_id}).json()[0]
+    assert finding["human_review_status"] == "kept"
+    assert finding["interested"] is False
+
+
+def test_interest_prioritizes_sidequest_pairs_without_changing_verification(client: TestClient) -> None:
+    first = create_item(client, title="First").json()["id"]
+    second = create_item(client, title="Second").json()["id"]
+    third = create_item(client, title="Third").json()["id"]
+    concept_ids = []
+    for item_id, name in [(first, "One mechanism"), (second, "Two mechanism"), (third, "Three mechanism")]:
+        concept_ids.append(client.post(f"/api/items/{item_id}/concepts", json={"name": name, "category": "mechanism"}).json()["id"])
+    for concept_id in concept_ids[:2]:
+        assert client.patch(f"/api/concepts/{concept_id}/interest", json={"interested": True}).status_code == 200
+
+    class CapturingAI(FakeAI):
+        first_pair: tuple[int, int] | None = None
+        def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
+            self.first_pair = (pairs[0]["item_a"]["id"], pairs[0]["item_b"]["id"])  # type: ignore[index]
+            return super().generate_candidates(pairs)
+
+    ai = CapturingAI()
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    assert client.post("/api/sidequests/surprise").status_code == 201
+    assert set(ai.first_pair or ()) == {first, second}
+    concepts = client.get(f"/api/items/{first}/concepts").json()
+    assert concepts[0]["concept_verification"] is None
+
+
 @pytest.mark.parametrize("connection", [
     "Both works explore extraterrestrial intelligence and aliens.",
     "Both entries discuss science, but from different formats and perspectives.",
@@ -632,7 +809,7 @@ def test_concept_quality_gate_separates_concept_and_relationship_evidence() -> N
 def test_quality_gate_accepts_grounded_descriptive_label_without_exact_name_match() -> None:
     excerpt = "People often infer purpose and intention from observable behavior even when the underlying causes remain uncertain."
     candidate = ValidatedConcept(
-        candidate_id="descriptive-1", accepted=True, rejection_reason="", discovery_origin="work_grounded", discovery_source_ids=["concept-1"], research_path="Research into observed behavior led to a source explaining how people infer possible goals from incomplete evidence.", label_kind="descriptive_label",
+        candidate_id="descriptive-1", accepted=True, rejection_reason="", discovery_origin="work_grounded", discovery_source_ids=["concept-1"], research_path="Research into observed behavior led to a source explaining how people infer possible goals from incomplete evidence.", label_kind="descriptive_label", concept_classification="grounded_interpretation",
         canonical_name="Inferring purpose from behavior", aliases=[], level="mechanism",
         definition="Reasoning from observable behavior to a possible purpose when direct design information is unavailable.",
         concept_evidence=[EvidenceReference(source_id="concept-1", excerpt=excerpt)], domain="reasoning",
@@ -686,7 +863,7 @@ def test_quality_gate_rejects_generic_or_work_specific_descriptive_labels(label:
 def test_quality_gate_rejects_altered_source_id_and_unsupported_hook() -> None:
     excerpt = "People form explanations from incomplete observations while uncertainty about hidden causes remains."
     candidate = ValidatedConcept(
-        candidate_id="descriptive-3", accepted=True, rejection_reason="", discovery_origin="work_grounded", discovery_source_ids=["concept-1"], research_path="Research into incomplete observations led to a source discussing provisional explanations under uncertainty.", label_kind="descriptive_label",
+        candidate_id="descriptive-3", accepted=True, rejection_reason="", discovery_origin="work_grounded", discovery_source_ids=["concept-1"], research_path="Research into incomplete observations led to a source discussing provisional explanations under uncertainty.", label_kind="descriptive_label", concept_classification="grounded_interpretation",
         canonical_name="Reasoning from incomplete traces", aliases=[], level="mechanism",
         definition="Drawing provisional explanations from incomplete observations.",
         concept_evidence=[EvidenceReference(source_id="concept-altered", excerpt=excerpt)], domain="reasoning",

@@ -15,7 +15,7 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, fiel
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, delete, inspect, select, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from .ai import AIConfigurationError, AIProviderError, EvidenceConceptCandidate, OpenRouterClient, get_ai_client
+from .ai import AIConfigurationError, AIProviderError, EvidenceConceptCandidate, EntityCandidate, OpenRouterClient, get_ai_client
 from .quality import candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from .research import ResearchProvider, get_research_provider
 
@@ -39,6 +39,7 @@ class Base(DeclarativeBase):
 class Kind(str, Enum):
     book = "book"
     movie = "movie"
+    tv_series = "tv_series"
     podcast = "podcast"
     article = "article"
     concept = "concept"
@@ -52,6 +53,8 @@ class CuriosityItem(Base):
     title: Mapped[str] = mapped_column(String(240), index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    creator: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    release_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class CanonicalConcept(Base):
@@ -99,6 +102,12 @@ class ItemConcept(Base):
     final_validation_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_audit_id: Mapped[int | None] = mapped_column(ForeignKey("concept_lead_audits.id"), index=True, nullable=True)
     user_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    concept_classification: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    evidence_form: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    interested: Mapped[bool] = mapped_column(default=False)
+    interest_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class Sidequest(Base):
@@ -126,6 +135,13 @@ class ItemEnrichment(Base):
     release_info: Mapped[str | None] = mapped_column(String(200), nullable=True)
     identity_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     confirmation_question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    identity_status: Mapped[str] = mapped_column(String(30), default="unresolved")
+    identity_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    resolved_media_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    identity_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    identity_candidates_json: Mapped[str] = mapped_column(Text, default="[]")
+    identity_source_snapshot_json: Mapped[str] = mapped_column(Text, default="[]")
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     researched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class ResearchSource(Base):
@@ -140,6 +156,7 @@ class ResearchSource(Base):
     excerpt: Mapped[str] = mapped_column(Text)
     retrieval_status: Mapped[str] = mapped_column(String(30), default="retrieved")
     retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class ConceptSource(Base):
     __tablename__ = "concept_sources"
@@ -179,6 +196,11 @@ class ConceptLeadAudit(Base):
     last_evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     evidence_review_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    concept_classification: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    evidence_form: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    interested: Mapped[bool] = mapped_column(default=False)
+    interest_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class ItemCreate(BaseModel):
@@ -186,6 +208,8 @@ class ItemCreate(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     note: str | None = Field(default=None, max_length=10000)
     url: str | None = Field(default=None, max_length=2000)
+    creator: str | None = Field(default=None, max_length=300)
+    release_year: int | None = Field(default=None, ge=1000, le=3000)
 
     @field_validator("url")
     @classmethod
@@ -197,6 +221,8 @@ class ItemUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=240)
     note: str | None = Field(default=None, max_length=10000)
     url: str | None = Field(default=None, max_length=2000)
+    creator: str | None = Field(default=None, max_length=300)
+    release_year: int | None = Field(default=None, ge=1000, le=3000)
 
     @field_validator("url")
     @classmethod
@@ -210,6 +236,8 @@ class ItemRead(BaseModel):
     title: str
     note: str | None
     url: str | None
+    creator: str | None
+    release_year: int | None
     created_at: datetime
 
 class ConceptCategory(str, Enum):
@@ -260,6 +288,11 @@ class ConceptRead(BaseModel):
     final_validation_outcome: str | None
     review_audit_id: int | None
     user_note: str | None
+    concept_classification: str | None
+    evidence_form: str | None
+    interested: bool
+    interest_note: str | None
+    interested_at: datetime | None
     created_at: datetime
 
 class ReviewDecision(BaseModel):
@@ -295,6 +328,11 @@ class RejectedFindingRead(BaseModel):
     validation: dict[str, object]
     sources: list[dict[str, object]]
     superseded_at: datetime | None
+    concept_classification: str | None
+    evidence_form: str | None
+    interested: bool
+    interest_note: str | None
+    interested_at: datetime | None
     created_at: datetime
 
 class SidequestRead(BaseModel):
@@ -332,6 +370,12 @@ class EnrichmentRead(BaseModel):
     release_info: str | None
     identity_summary: str | None
     confirmation_question: str | None
+    identity_status: str
+    identity_key: str | None
+    resolved_media_type: str | None
+    identity_confidence: float | None
+    identity_candidates: list[dict[str, object]] = Field(default_factory=list)
+    confirmed_at: datetime | None
     researched_at: datetime | None
     sources: list[ResearchSourceRead]
     concepts: list[ConceptRead]
@@ -339,6 +383,13 @@ class EnrichmentRead(BaseModel):
 
 class EnrichmentRequest(BaseModel):
     identity_hint: str | None = Field(default=None, max_length=500)
+
+class IdentityConfirmation(BaseModel):
+    candidate_id: str = Field(min_length=1, max_length=80)
+
+class InterestUpdate(BaseModel):
+    interested: bool
+    note: str | None = Field(default=None, max_length=2000)
 
 def normalize_url(value: str | None) -> str | None:
     if value is None or not value.strip():
@@ -351,24 +402,37 @@ def get_db():
 
 Base.metadata.create_all(bind=engine)
 
-def migrate_additive_columns() -> None:
+def migrate_additive_columns(target_engine=engine, database_url: str = DATABASE_URL) -> None:
     """Small additive migration runner for existing local SQLite databases."""
-    if not DATABASE_URL.startswith("sqlite"):
+    if not database_url.startswith("sqlite"):
         return
     additions = {
-        "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "relationship_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT"},
+        "curiosity_items": {"creator": "VARCHAR(300)", "release_year": "INTEGER"},
+        "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "relationship_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "superseded_at": "DATETIME"},
         "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'"},
         "concept_sources": {"support_kind": "VARCHAR(20) NOT NULL DEFAULT 'relationship'"},
         "canonical_concepts": {"aliases_json": "TEXT NOT NULL DEFAULT '[]'", "label_kind": "VARCHAR(30) NOT NULL DEFAULT 'established_term'"},
-        "concept_lead_audits": {"stage": "VARCHAR(30) NOT NULL DEFAULT 'concept_candidate'", "discovery_origin": "VARCHAR(30)", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "research_path": "TEXT", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "candidate_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "validation_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "automated_evidence_status": "VARCHAR(30) NOT NULL DEFAULT 'unverified'", "human_review_status": "VARCHAR(20) NOT NULL DEFAULT 'pending'", "human_review_note": "TEXT", "review_history_json": "TEXT NOT NULL DEFAULT '[]'", "kept_concept_id": "INTEGER", "last_evaluated_at": "DATETIME", "evidence_review_detail": "TEXT", "superseded_at": "DATETIME"},
+        "concept_lead_audits": {"stage": "VARCHAR(30) NOT NULL DEFAULT 'concept_candidate'", "discovery_origin": "VARCHAR(30)", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "research_path": "TEXT", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "candidate_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "validation_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "automated_evidence_status": "VARCHAR(30) NOT NULL DEFAULT 'unverified'", "human_review_status": "VARCHAR(20) NOT NULL DEFAULT 'pending'", "human_review_note": "TEXT", "review_history_json": "TEXT NOT NULL DEFAULT '[]'", "kept_concept_id": "INTEGER", "last_evaluated_at": "DATETIME", "evidence_review_detail": "TEXT", "superseded_at": "DATETIME", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME"},
+        "item_enrichments": {"identity_status": "VARCHAR(30) NOT NULL DEFAULT 'unresolved'", "identity_key": "VARCHAR(300)", "resolved_media_type": "VARCHAR(40)", "identity_confidence": "FLOAT", "identity_candidates_json": "TEXT NOT NULL DEFAULT '[]'", "identity_source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "confirmed_at": "DATETIME"},
+        "research_sources": {"superseded_at": "DATETIME"},
     }
-    with engine.begin() as connection:
+    with target_engine.begin() as connection:
         schema = inspect(connection)
         for table, columns in additions.items():
             existing = {column["name"] for column in schema.get_columns(table)}
             for name, definition in columns.items():
                 if name not in existing:
                     connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        # Known, explicit corrections only. Ambiguous movie records are left untouched.
+        connection.exec_driver_sql(
+            "UPDATE curiosity_items SET kind = 'tv_series' "
+            "WHERE kind = 'movie' AND lower(trim(title)) IN ('castle', 'game of thrones', 'normal people')"
+        )
+        known_tv = "SELECT id FROM curiosity_items WHERE kind = 'tv_series' AND lower(trim(title)) IN ('castle', 'game of thrones', 'normal people')"
+        connection.exec_driver_sql(f"UPDATE item_concepts SET superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP) WHERE origin = 'ai' AND item_id IN ({known_tv}) AND item_id IN (SELECT item_id FROM item_enrichments WHERE identity_status != 'confirmed')")
+        connection.exec_driver_sql(f"UPDATE research_sources SET superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP) WHERE item_id IN ({known_tv}) AND item_id IN (SELECT item_id FROM item_enrichments WHERE identity_status != 'confirmed')")
+        connection.exec_driver_sql(f"UPDATE concept_lead_audits SET superseded_at = COALESCE(superseded_at, CURRENT_TIMESTAMP) WHERE item_id IN ({known_tv}) AND item_id IN (SELECT item_id FROM item_enrichments WHERE identity_status != 'confirmed')")
+        connection.exec_driver_sql(f"UPDATE item_enrichments SET status = 'needs_confirmation' WHERE item_id IN ({known_tv}) AND identity_status != 'confirmed'")
 
 migrate_additive_columns()
 app = FastAPI(title="Asterisk", description="There's more to the story.", version="0.2.0")
@@ -414,6 +478,8 @@ def concept_read(concept: ItemConcept, db: Session) -> ConceptRead:
         initial_validation_outcome=concept.initial_validation_outcome,
         recovery_attempt=json.loads(concept.recovery_attempt_json or "{}"), final_validation_outcome=concept.final_validation_outcome,
         review_audit_id=concept.review_audit_id, user_note=concept.user_note,
+        concept_classification=concept.concept_classification, evidence_form=concept.evidence_form,
+        interested=concept.interested, interest_note=concept.interest_note, interested_at=concept.interested_at,
     )
 
 def rejected_finding_read(lead: ConceptLeadAudit, db: Session) -> RejectedFindingRead:
@@ -438,18 +504,26 @@ def rejected_finding_read(lead: ConceptLeadAudit, db: Session) -> RejectedFindin
         kept_concept_id=lead.kept_concept_id, evidence_review_detail=lead.evidence_review_detail,
         last_evaluated_at=lead.last_evaluated_at, candidate=json.loads(lead.candidate_snapshot_json or "{}"), validation=json.loads(lead.validation_snapshot_json or "{}"),
         sources=sources, superseded_at=lead.superseded_at, created_at=lead.created_at,
+        concept_classification=lead.concept_classification, evidence_form=lead.evidence_form,
+        interested=lead.interested, interest_note=lead.interest_note, interested_at=lead.interested_at,
     )
 
 def enrichment_read(item_id: int, db: Session) -> EnrichmentRead:
     enrichment = db.get(ItemEnrichment, item_id)
-    sources = db.scalars(select(ResearchSource).where(ResearchSource.item_id == item_id).order_by(ResearchSource.id)).all()
-    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id).order_by(ItemConcept.created_at, ItemConcept.id)).all()
+    sources = db.scalars(select(ResearchSource).where(ResearchSource.item_id == item_id, ResearchSource.superseded_at.is_(None)).order_by(ResearchSource.id)).all()
+    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.created_at, ItemConcept.id)).all()
     rejected = db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id, ConceptLeadAudit.accepted == False).order_by(ConceptLeadAudit.id)).all()  # noqa: E712
     return EnrichmentRead(
         status=enrichment.status if enrichment else "not_researched",
         resolved_title=enrichment.resolved_title if enrichment else None, creator=enrichment.creator if enrichment else None,
         release_info=enrichment.release_info if enrichment else None, identity_summary=enrichment.identity_summary if enrichment else None,
         confirmation_question=enrichment.confirmation_question if enrichment else None,
+        identity_status=enrichment.identity_status if enrichment else "unresolved",
+        identity_key=enrichment.identity_key if enrichment else None,
+        resolved_media_type=enrichment.resolved_media_type if enrichment else None,
+        identity_confidence=enrichment.identity_confidence if enrichment else None,
+        identity_candidates=json.loads(enrichment.identity_candidates_json or "[]") if enrichment else [],
+        confirmed_at=enrichment.confirmed_at if enrichment else None,
         researched_at=enrichment.researched_at if enrichment else None,
         sources=list(sources), concepts=[concept_read(concept, db) for concept in concepts],
         rejected_leads=[rejected_finding_read(lead, db) for lead in rejected],
@@ -458,6 +532,64 @@ def enrichment_read(item_id: int, db: Session) -> EnrichmentRead:
 
 def normalize_concept_term(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+WORK_KINDS = {Kind.book.value, Kind.movie.value, Kind.tv_series.value, Kind.podcast.value, Kind.article.value}
+
+
+def identity_key(candidate: EntityCandidate) -> str:
+    parts = [candidate.media_type, normalize_concept_term(candidate.title), normalize_concept_term(candidate.creator), str(candidate.release_year or "")]
+    return "|".join(parts)
+
+
+def identity_candidate_is_valid(candidate: EntityCandidate, item: CuriosityItem, source_ids: set[str]) -> bool:
+    return (
+        candidate.media_type == item.kind
+        and normalize_concept_term(candidate.title) == normalize_concept_term(item.title)
+        and candidate.confidence >= 0.90
+        and bool(candidate.source_ids)
+        and set(candidate.source_ids) <= source_ids
+        and (not item.creator or normalize_concept_term(item.creator) in normalize_concept_term(candidate.creator))
+        and (not item.release_year or item.release_year == candidate.release_year)
+    )
+
+
+def save_identity_resolution(item: CuriosityItem, resolution, sources: list[dict[str, str]], db: Session) -> ItemEnrichment:
+    enrichment = db.get(ItemEnrichment, item.id) or ItemEnrichment(item_id=item.id, status="not_researched")
+    candidates = [candidate.model_dump() for candidate in resolution.candidates]
+    enrichment.identity_candidates_json = json.dumps(candidates)
+    enrichment.identity_source_snapshot_json = json.dumps(sources)
+    enrichment.confirmation_question = resolution.reason
+    valid = [candidate for candidate in resolution.candidates if identity_candidate_is_valid(candidate, item, {source["source_id"] for source in sources})]
+    if resolution.status == "confirmed" and len(valid) == 1:
+        candidate = valid[0]
+        enrichment.identity_status = "confirmed"
+        enrichment.identity_key = identity_key(candidate)
+        enrichment.resolved_title = candidate.title
+        enrichment.creator = candidate.creator or None
+        enrichment.release_info = str(candidate.release_year) if candidate.release_year else None
+        enrichment.resolved_media_type = candidate.media_type
+        enrichment.identity_summary = candidate.description
+        enrichment.identity_confidence = candidate.confidence
+        enrichment.confirmed_at = datetime.now(timezone.utc)
+        enrichment.confirmation_question = None
+    else:
+        enrichment.identity_status = "ambiguous" if resolution.candidates else "unresolved"
+        enrichment.status = "needs_confirmation"
+    db.add(enrichment)
+    db.commit()
+    db.refresh(enrichment)
+    return enrichment
+
+
+def retire_stale_identity_research(item_id: int, db: Session) -> None:
+    now = datetime.now(timezone.utc)
+    for concept in db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai", ItemConcept.superseded_at.is_(None))).all():
+        concept.superseded_at = now
+    for source in db.scalars(select(ResearchSource).where(ResearchSource.item_id == item_id, ResearchSource.superseded_at.is_(None))).all():
+        source.superseded_at = now
+    for audit in db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id, ConceptLeadAudit.superseded_at.is_(None))).all():
+        audit.superseded_at = now
 
 
 def evidence_recovery_limit() -> int:
@@ -517,7 +649,7 @@ def create_item(data: ItemCreate, db: Session = Depends(get_db)):
 def list_concepts(item_id: int, db: Session = Depends(get_db)):
     if db.get(CuriosityItem, item_id) is None:
         raise HTTPException(404, "Item not found")
-    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id).order_by(ItemConcept.created_at, ItemConcept.id)).all()
+    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.created_at, ItemConcept.id)).all()
     return [concept_read(concept, db) for concept in concepts]
 
 @app.post("/api/items/{item_id}/concepts", response_model=ConceptRead, status_code=201)
@@ -591,6 +723,9 @@ def review_rejected_finding(finding_id: int, data: ReviewDecision, db: Session =
                 discovery_source_ids_json=lead.discovery_source_ids_json or "[]", initial_validation_outcome=lead.initial_validation_outcome,
                 recovery_attempt_json=lead.recovery_attempt_json or "{}", final_validation_outcome=lead.final_validation_outcome or lead.rejection_reason,
                 review_audit_id=lead.id, user_note=data.note,
+                concept_classification=lead.concept_classification or "speculative_connection",
+                evidence_form=lead.evidence_form,
+                interested=lead.interested, interest_note=lead.interest_note, interested_at=lead.interested_at,
             )
             db.add(existing)
             db.flush()
@@ -604,6 +739,44 @@ def review_rejected_finding(finding_id: int, data: ReviewDecision, db: Session =
     lead.human_review_status = {"keep": "kept", "dismiss": "dismissed", "pending": "pending"}[data.decision]
     lead.human_review_note = data.note
     lead.review_history_json = json.dumps(history)
+    db.commit()
+    db.refresh(lead)
+    return rejected_finding_read(lead, db)
+
+
+@app.patch("/api/concepts/{concept_id}/interest", response_model=ConceptRead)
+def update_concept_interest(concept_id: int, data: InterestUpdate, db: Session = Depends(get_db)):
+    concept = db.get(ItemConcept, concept_id)
+    if concept is None:
+        raise HTTPException(404, "Concept not found")
+    concept.interested = data.interested
+    concept.interest_note = data.note if data.interested else None
+    concept.interested_at = datetime.now(timezone.utc) if data.interested else None
+    if concept.review_audit_id is not None:
+        lead = db.get(ConceptLeadAudit, concept.review_audit_id)
+        if lead is not None:
+            lead.interested = data.interested
+            lead.interest_note = concept.interest_note
+            lead.interested_at = concept.interested_at
+    db.commit()
+    db.refresh(concept)
+    return concept_read(concept, db)
+
+
+@app.patch("/api/rejected-findings/{finding_id}/interest", response_model=RejectedFindingRead)
+def update_finding_interest(finding_id: int, data: InterestUpdate, db: Session = Depends(get_db)):
+    lead = db.get(ConceptLeadAudit, finding_id)
+    if lead is None or lead.accepted:
+        raise HTTPException(404, "Rejected finding not found")
+    lead.interested = data.interested
+    lead.interest_note = data.note if data.interested else None
+    lead.interested_at = datetime.now(timezone.utc) if data.interested else None
+    if lead.kept_concept_id is not None:
+        concept = db.get(ItemConcept, lead.kept_concept_id)
+        if concept is not None:
+            concept.interested = lead.interested
+            concept.interest_note = lead.interest_note
+            concept.interested_at = lead.interested_at
     db.commit()
     db.refresh(lead)
     return rejected_finding_read(lead, db)
@@ -652,11 +825,13 @@ def extract_concepts(item_id: int, db: Session = Depends(get_db), ai: OpenRouter
         extraction = ai.extract_concepts({"kind": item.kind, "title": item.title, "note": item.note, "url": item.url})
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc
-    db.execute(delete(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai"))
+    now = datetime.now(timezone.utc)
+    for previous in db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai", ItemConcept.superseded_at.is_(None))).all():
+        previous.superseded_at = now
     for extracted in extraction.concepts:
         db.add(ItemConcept(item_id=item_id, name=extracted.name.strip(), category=extracted.category, origin="ai", explanation=extracted.explanation))
     db.commit()
-    return db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id).order_by(ItemConcept.created_at, ItemConcept.id)).all()
+    return db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.created_at, ItemConcept.id)).all()
 
 @app.get("/api/items/{item_id}/enrichment", response_model=EnrichmentRead)
 def get_enrichment(item_id: int, db: Session = Depends(get_db)):
@@ -664,33 +839,130 @@ def get_enrichment(item_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Item not found")
     return enrichment_read(item_id, db)
 
+
+@app.post("/api/items/{item_id}/identity/resolve", response_model=EnrichmentRead)
+def resolve_item_identity(item_id: int, db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client), research: ResearchProvider = Depends(get_research_provider)):
+    item = db.get(CuriosityItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Item not found")
+    existing = db.get(ItemEnrichment, item_id)
+    if existing is not None and existing.identity_status == "confirmed":
+        return enrichment_read(item_id, db)
+    if item.kind not in WORK_KINDS:
+        enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="not_researched")
+        enrichment.identity_status = "not_applicable"
+        enrichment.resolved_title = item.title
+        db.add(enrichment)
+        db.commit()
+        return enrichment_read(item_id, db)
+    payload = {"kind": item.kind, "title": item.title, "note": item.note, "url": item.url, "creator": item.creator, "release_year": item.release_year}
+    try:
+        packet = research.research(payload)
+        source_payloads = [{"source_id": f"identity-{index}", "title": source.title, "excerpt": source.excerpt[:2500], "url": source.url} for index, source in enumerate(packet.sources, 1)]
+        resolution = ai.resolve_identity(payload, packet.synthesis, [{key: source[key] for key in ("source_id", "title", "excerpt")} for source in source_payloads])
+    except (AIConfigurationError, AIProviderError) as exc:
+        raise ai_http_error(exc) from exc
+    save_identity_resolution(item, resolution, source_payloads, db)
+    return enrichment_read(item_id, db)
+
+
+@app.post("/api/items/{item_id}/identity/confirm", response_model=EnrichmentRead)
+def confirm_item_identity(item_id: int, data: IdentityConfirmation, db: Session = Depends(get_db)):
+    item = db.get(CuriosityItem, item_id)
+    enrichment = db.get(ItemEnrichment, item_id)
+    if item is None:
+        raise HTTPException(404, "Item not found")
+    if enrichment is None:
+        raise HTTPException(409, "Resolve this work before confirming its identity.")
+    candidates = [EntityCandidate.model_validate(candidate) for candidate in json.loads(enrichment.identity_candidates_json or "[]")]
+    candidate = next((entry for entry in candidates if entry.candidate_id == data.candidate_id), None)
+    if candidate is None:
+        raise HTTPException(422, "That identity candidate is no longer available. Resolve the work again.")
+    if candidate.media_type != item.kind:
+        raise HTTPException(422, "The selected identity does not match this curiosity's media type.")
+    changed = enrichment.identity_key != identity_key(candidate) and (enrichment.identity_key is not None or enrichment.status == "researched")
+    if changed:
+        retire_stale_identity_research(item_id, db)
+    enrichment.identity_status = "confirmed"
+    enrichment.identity_key = identity_key(candidate)
+    enrichment.resolved_title = candidate.title
+    enrichment.creator = candidate.creator or None
+    enrichment.release_info = str(candidate.release_year) if candidate.release_year else None
+    enrichment.resolved_media_type = candidate.media_type
+    enrichment.identity_summary = candidate.description
+    enrichment.identity_confidence = candidate.confidence
+    enrichment.confirmed_at = datetime.now(timezone.utc)
+    enrichment.confirmation_question = None
+    enrichment.status = "not_researched"
+    db.commit()
+    return enrichment_read(item_id, db)
+
+
+@app.delete("/api/items/{item_id}/identity", response_model=EnrichmentRead)
+def reset_item_identity(item_id: int, db: Session = Depends(get_db)):
+    item = db.get(CuriosityItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Item not found")
+    enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="not_researched")
+    retire_stale_identity_research(item_id, db)
+    enrichment.status = "not_researched"
+    enrichment.identity_status = "unresolved"
+    enrichment.identity_key = None
+    enrichment.resolved_title = None
+    enrichment.creator = None
+    enrichment.release_info = None
+    enrichment.resolved_media_type = None
+    enrichment.identity_summary = None
+    enrichment.identity_confidence = None
+    enrichment.identity_candidates_json = "[]"
+    enrichment.identity_source_snapshot_json = "[]"
+    enrichment.confirmed_at = None
+    enrichment.confirmation_question = None
+    db.add(enrichment)
+    db.commit()
+    return enrichment_read(item_id, db)
+
 @app.post("/api/items/{item_id}/enrich", response_model=EnrichmentRead)
 def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client), research: ResearchProvider = Depends(get_research_provider)):
     item = db.get(CuriosityItem, item_id)
     if item is None:
         raise HTTPException(404, "Item not found")
-    payload = {"kind": item.kind, "title": item.title, "note": item.note, "url": item.url, "identity_hint": data.identity_hint if data else None}
+    payload = {"kind": item.kind, "title": item.title, "note": item.note, "url": item.url, "creator": item.creator, "release_year": item.release_year}
+    enrichment = db.get(ItemEnrichment, item_id)
     try:
-        packet = research.research(payload)
+        packet = None
+        if item.kind in WORK_KINDS and (enrichment is None or enrichment.identity_status != "confirmed"):
+            prior_identity_key = enrichment.identity_key if enrichment else None
+            had_prior_research = bool(enrichment and enrichment.status == "researched")
+            identity_packet = research.research(payload)
+            identity_sources = [{"source_id": f"identity-{index}", "title": source.title, "excerpt": source.excerpt[:2500], "url": source.url} for index, source in enumerate(identity_packet.sources, 1)]
+            resolution = ai.resolve_identity(payload, identity_packet.synthesis, [{key: source[key] for key in ("source_id", "title", "excerpt")} for source in identity_sources])
+            enrichment = save_identity_resolution(item, resolution, identity_sources, db)
+            if enrichment.identity_status != "confirmed":
+                return enrichment_read(item_id, db)
+            if had_prior_research and prior_identity_key != enrichment.identity_key:
+                retire_stale_identity_research(item_id, db)
+                db.commit()
+            packet = identity_packet
+        if enrichment is not None and enrichment.identity_status == "confirmed":
+            payload["confirmed_identity"] = {
+                "identity_key": enrichment.identity_key, "title": enrichment.resolved_title,
+                "creator": enrichment.creator, "release_info": enrichment.release_info,
+                "media_type": enrichment.resolved_media_type,
+            }
+        if packet is None:
+            packet = research.research(payload)
         work_source_payloads = [{"source_id": f"work-{index}", "title": source.title, "excerpt": source.excerpt[:2500]} for index, source in enumerate(packet.sources, 1)]
         work_source_urls = {payload["source_id"]: source.url for payload, source in zip(work_source_payloads, packet.sources)}
         understanding = ai.understand_work(payload, packet.synthesis, work_source_payloads)
         if item.kind in {Kind.concept.value, Kind.question.value, Kind.thought.value}:
-            understanding = understanding.model_copy(update={"ambiguous_identity": False, "confirmation_question": "", "resolved_title": understanding.resolved_title or item.title})
+            understanding = understanding.model_copy(update={"ambiguous_identity": False, "confirmation_question": "", "resolved_title": understanding.resolved_title or item.title, "identity_matches_sources": True})
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc
 
-    identity_confirmed = bool(data and data.identity_hint and data.identity_hint.strip())
-    if understanding.ambiguous_identity and identity_confirmed:
-        raise HTTPException(502, "The analysis did not honor the confirmed identity. Existing research was preserved; please retry.")
-    if understanding.ambiguous_identity and not identity_confirmed:
-        enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="needs_confirmation")
-        enrichment.status = "needs_confirmation"
-        enrichment.confirmation_question = understanding.confirmation_question or "Please add identifying details to the title or note, then refresh research."
-        enrichment.researched_at = datetime.now(timezone.utc)
-        db.add(enrichment)
-        db.commit()
-        return enrichment_read(item_id, db)
+    if item.kind in WORK_KINDS and (understanding.ambiguous_identity or not understanding.identity_matches_sources):
+        reason = understanding.identity_mismatch_reason or understanding.confirmation_question or "The retrieved sources do not match the confirmed work identity."
+        raise HTTPException(502, f"{reason} Existing research was preserved; correct or resolve the identity before retrying.")
 
     try:
         problems = ai.identify_research_problems(understanding, work_source_payloads)
@@ -758,12 +1030,7 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc
 
-    db.execute(delete(ConceptSource).where(ConceptSource.concept_id.in_(select(ItemConcept.id).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai"))))
-    db.execute(delete(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.origin == "ai"))
-    db.execute(delete(ResearchSource).where(ResearchSource.item_id == item_id))
-    previous_audits = db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id, ConceptLeadAudit.superseded_at.is_(None))).all()
-    for previous in previous_audits:
-        previous.superseded_at = datetime.now(timezone.utc)
+    retire_stale_identity_research(item_id, db)
     unique_sources = {source.url: (source, "work") for source in packet.sources if source.url}
     for source in all_concept_sources:
         if source.url:
@@ -771,15 +1038,28 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             unique_sources[source.url] = (source, "work_and_concept" if source.url in unique_sources else source_type)
     saved_sources: dict[str, ResearchSource] = {}
     for source, source_type in unique_sources.values():
-        saved = ResearchSource(item_id=item_id, url=source.url, title=source.title[:500], publisher=urlparse(source.url).netloc or None, source_type=source_type, excerpt=source.excerpt[:2500])
-        db.add(saved)
+        saved = db.scalar(select(ResearchSource).where(ResearchSource.item_id == item_id, ResearchSource.url == source.url))
+        if saved is None:
+            saved = ResearchSource(item_id=item_id, url=source.url, title=source.title[:500], publisher=urlparse(source.url).netloc or None, source_type=source_type, excerpt=source.excerpt[:2500])
+            db.add(saved)
+        else:
+            saved.title = source.title[:500]
+            saved.publisher = urlparse(source.url).netloc or None
+            saved.source_type = source_type
+            saved.excerpt = source.excerpt[:2500]
+            saved.retrieval_status = "retrieved"
+            saved.retrieved_at = datetime.now(timezone.utc)
+            saved.superseded_at = None
         db.flush()
         saved_sources[source.url] = saved
     enrichment = db.get(ItemEnrichment, item_id) or ItemEnrichment(item_id=item_id, status="researched")
     enrichment.status = "researched"
-    enrichment.resolved_title = understanding.resolved_title or None
-    enrichment.creator = understanding.creator or None
-    enrichment.release_info = understanding.release_info or None
+    if item.kind not in WORK_KINDS:
+        enrichment.identity_status = "not_applicable"
+        enrichment.resolved_title = understanding.resolved_title or item.title
+        enrichment.creator = understanding.creator or None
+        enrichment.release_info = understanding.release_info or None
+        enrichment.resolved_media_type = item.kind
     enrichment.identity_summary = understanding.identity_summary or None
     enrichment.confirmation_question = understanding.confirmation_question or None
     enrichment.researched_at = datetime.now(timezone.utc)
@@ -802,7 +1082,7 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
         source_url_by_id = {**work_source_urls, **concept_source_urls}
         source_snapshots = [{**source_payload_by_id[source_id], "url": source_url_by_id.get(source_id, ""), "source_type": "work" if source_id in work_source_ids else "independent"} for source_id in referenced_ids if source_id in source_payload_by_id]
         evidence_issue = candidate_evidence_rejection(candidate, concept_source_text, concept_source_urls)
-        db.add(ConceptLeadAudit(item_id=item_id, name=candidate.canonical_name, proposed_definition=candidate.definition, motivating_detail=motivating_detail, proposed_relationship=result.relationship_evidence if result else candidate.research_path, relationship_type=result.relationship_type if result else "unsupported", research_questions_json=json.dumps(candidate.problem_ids), accepted=bool(result and result.accepted), rejection_reason=None if result and result.accepted else final_outcome, stage="concept_candidate", discovery_origin=candidate.discovery_origin, discovery_source_ids_json=json.dumps(candidate.discovery_source_ids), research_path=candidate.research_path, initial_validation_outcome=initial_evidence_outcomes.get(candidate.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(candidate.candidate_id, {})), final_validation_outcome=final_outcome, candidate_snapshot_json=json.dumps(candidate.model_dump()), validation_snapshot_json=json.dumps(result.model_dump()) if result else "{}", source_snapshot_json=json.dumps(source_snapshots), automated_evidence_status="partially_supported" if evidence_issue is None else "unverified", evidence_review_detail=evidence_issue or "Independent concept evidence passed deterministic checks; the final automated outcome is preserved separately."))
+        db.add(ConceptLeadAudit(item_id=item_id, name=candidate.canonical_name, proposed_definition=candidate.definition, motivating_detail=motivating_detail, proposed_relationship=result.relationship_evidence if result else candidate.research_path, relationship_type=result.relationship_type if result else "unsupported", research_questions_json=json.dumps(candidate.problem_ids), accepted=bool(result and result.accepted), rejection_reason=None if result and result.accepted else final_outcome, stage="concept_candidate", discovery_origin=candidate.discovery_origin, discovery_source_ids_json=json.dumps(candidate.discovery_source_ids), research_path=candidate.research_path, initial_validation_outcome=initial_evidence_outcomes.get(candidate.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(candidate.candidate_id, {})), final_validation_outcome=final_outcome, candidate_snapshot_json=json.dumps(candidate.model_dump()), validation_snapshot_json=json.dumps(result.model_dump()) if result else "{}", source_snapshot_json=json.dumps(source_snapshots), automated_evidence_status="partially_supported" if evidence_issue is None else "unverified", evidence_review_detail=evidence_issue or "Independent concept evidence passed deterministic checks; the final automated outcome is preserved separately.", concept_classification=candidate.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in candidate.concept_evidence) else "quotation"))
     for problem in problems.problems:
         has_candidates = bool(candidates_by_problem.get(problem.problem_id))
         reason = None if has_candidates else next(iter(candidates.insufficient_evidence_reasons), "Independent research did not yield a source-grounded canonical concept for this problem.")
@@ -816,8 +1096,8 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             if normalized_name in seen_concepts:
                 continue
             seen_concepts.add(normalized_name)
-            canonical = resolve_canonical_concept(db, extracted.canonical_name, extracted.aliases, extracted.definition, extracted.domain, extracted.mechanism, extracted.concept_verification, extracted.label_kind)
-            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.")
+            canonical = resolve_canonical_concept(db, extracted.canonical_name, extracted.aliases, extracted.definition, extracted.domain, extracted.mechanism, extracted.concept_verification, extracted.label_kind) if extracted.concept_classification == "established_concept" else None
+            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id if canonical else None, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.", concept_classification=extracted.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in extracted.concept_evidence) else "quotation")
             db.add(concept)
             db.flush()
             support_by_url: dict[str, set[str]] = {}
@@ -848,13 +1128,32 @@ def list_sidequests(db: Session = Depends(get_db)):
 @app.post("/api/sidequests/surprise", response_model=SidequestRead, status_code=201)
 def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client)):
     items = db.scalars(select(CuriosityItem).order_by(CuriosityItem.id)).all()
-    concepts = db.scalars(select(ItemConcept).order_by(ItemConcept.item_id, ItemConcept.id)).all()
+    concepts = db.scalars(select(ItemConcept).where(ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.item_id, ItemConcept.id)).all()
     by_item: dict[int, list[ItemConcept]] = {}
     for concept in concepts:
         by_item.setdefault(concept.item_id, []).append(concept)
     researched_ids = set(db.scalars(select(ItemEnrichment.item_id).where(ItemEnrichment.status == "researched")).all())
     eligible = [item for item in items if by_item.get(item.id) and (not researched_ids or item.id in researched_ids)]
-    pairs = list(combinations(eligible, 2))
+    previous_terms = set()
+    for saved_concepts in db.scalars(select(Sidequest.concepts_json)).all():
+        for name in json.loads(saved_concepts or "[]"):
+            previous_terms.add(normalize_concept_term(str(name)))
+
+    def pair_score(pair: tuple[CuriosityItem, CuriosityItem]) -> tuple[float, int, int]:
+        item_a, item_b = pair
+        a_concepts, b_concepts = by_item[item_a.id], by_item[item_b.id]
+        interest = sum(1 for concept in [*a_concepts, *b_concepts] if concept.interested)
+        mechanisms = sum(1 for concept in [*a_concepts, *b_concepts] if concept.level == "mechanism" or concept.category == "mechanism")
+        established = sum(1 for concept in [*a_concepts, *b_concepts] if concept.concept_classification in {"established_concept", "grounded_interpretation"})
+        a_terms = {normalize_concept_term(concept.name) for concept in a_concepts}
+        b_terms = {normalize_concept_term(concept.name) for concept in b_concepts}
+        overlap_penalty = len(a_terms & b_terms) * 2
+        repetition_penalty = sum(1 for term in a_terms | b_terms if term in previous_terms)
+        diversity = 2 if item_a.kind != item_b.kind else 0
+        score = interest * 8 + mechanisms * 2 + established + diversity - overlap_penalty - repetition_penalty
+        return (score, -item_a.id, -item_b.id)
+
+    pairs = sorted(combinations(eligible, 2), key=pair_score, reverse=True)
     if not pairs:
         raise HTTPException(422, "Add concepts to at least two curiosities before asking for a Sidequest.")
     pair_payloads = []
@@ -863,7 +1162,8 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         allowed_pairs.add(frozenset((item_a.id, item_b.id)))
         def concept_payload(concept: ItemConcept) -> dict[str, object]:
             source_urls = [] if concept.origin == "user_kept" else list(db.scalars(select(ResearchSource.url).join(ConceptSource, ConceptSource.source_id == ResearchSource.id).where(ConceptSource.concept_id == concept.id)).all())
-            return {"name": concept.name, "level": concept.level or "legacy", "explanation": concept.explanation, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "human_kept": concept.origin == "user_kept", "sources": source_urls}
+            generic = any(re.search(pattern, concept.name.casefold()) for pattern in (r"\bcoming of age\b", r"\bteam dynamics\b", r"\boppression\b", r"\bmilitary strateg"))
+            return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "human_kept": concept.origin == "user_kept", "interested": concept.interested, "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
         pair_payloads.append({
             "item_a": {"id": item_a.id, "kind": item_a.kind, "title": item_a.title, "note": item_a.note, "concepts": [concept_payload(c) for c in by_item[item_a.id]]},
             "item_b": {"id": item_b.id, "kind": item_b.kind, "title": item_b.title, "note": item_b.note, "concepts": [concept_payload(c) for c in by_item[item_b.id]]},
@@ -909,6 +1209,17 @@ def update_item(item_id: int, data: ItemUpdate, db: Session = Depends(get_db)):
         if changes["title"] is None or not changes["title"].strip():
             raise HTTPException(422, "Title cannot be blank")
         changes["title"] = changes["title"].strip()
+    identity_changed = any(field in changes and changes[field] != getattr(item, field) for field in ("kind", "title", "creator", "release_year"))
+    if identity_changed:
+        enrichment = db.get(ItemEnrichment, item_id)
+        if enrichment is not None:
+            retire_stale_identity_research(item_id, db)
+            enrichment.status = "not_researched"
+            enrichment.identity_status = "unresolved"
+            enrichment.identity_key = None
+            enrichment.identity_candidates_json = "[]"
+            enrichment.identity_source_snapshot_json = "[]"
+            enrichment.confirmed_at = None
     for field, value in changes.items():
         setattr(item, field, value)
     db.commit()

@@ -79,7 +79,9 @@ def candidate_evidence_rejection(candidate: EvidenceConceptCandidate, concept_so
             return "A cited source is inaccessible, low-value, or lacks substantive retrieved content."
         evidence = re.sub(r"[^a-z0-9]+", " ", reference.excerpt.casefold()).strip()
         normalized_text = re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
-        if len(evidence.split()) < 8 or evidence not in normalized_text:
+        if len(evidence.split()) < 8:
+            return "A cited evidence passage is too short to substantiate the candidate."
+        if reference.evidence_form == "quotation" and evidence not in normalized_text:
             return "A cited excerpt is not a substantive verbatim passage from its referenced source."
     if candidate.label_kind == "established_term":
         cited_text = re.sub(r"[^a-z0-9]+", " ", " ".join(concept_source_text[source_id] for source_id in cited_ids).casefold())
@@ -94,6 +96,9 @@ def rebind_exact_evidence(candidate: EvidenceConceptCandidate, concept_source_te
     rebound: list[EvidenceReference] = []
     events: list[dict[str, str]] = []
     for reference in candidate.concept_evidence:
+        if reference.evidence_form != "quotation":
+            rebound.append(reference)
+            continue
         evidence = re.sub(r"[^a-z0-9]+", " ", reference.excerpt.casefold()).strip()
         current = re.sub(r"[^a-z0-9]+", " ", concept_source_text.get(reference.source_id, "").casefold()).strip()
         if evidence and evidence in current:
@@ -101,7 +106,7 @@ def rebind_exact_evidence(candidate: EvidenceConceptCandidate, concept_source_te
             continue
         matches = [source_id for source_id, text in concept_source_text.items() if evidence and evidence in re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()]
         if len(matches) == 1:
-            rebound.append(EvidenceReference(source_id=matches[0], excerpt=reference.excerpt))
+            rebound.append(EvidenceReference(source_id=matches[0], excerpt=reference.excerpt, evidence_form="quotation"))
             events.append({"from_source_id": reference.source_id, "to_source_id": matches[0], "outcome": "exact_excerpt_rebound"})
         else:
             rebound.append(reference)
@@ -110,8 +115,16 @@ def rebind_exact_evidence(candidate: EvidenceConceptCandidate, concept_source_te
 
 def concept_quality_rejection(result: ValidatedConcept, work_source_ids: set[str], concept_source_text: dict[str, str], concept_source_urls: dict[str, str] | None = None, work_title: str = "") -> str | None:
     name = result.canonical_name.strip().lower()
-    if any(re.search(pattern, name) for pattern in GENERIC_CONCEPT_PATTERNS):
+    if any(re.search(pattern, name) for pattern in GENERIC_CONCEPT_PATTERNS) and len(result.mechanism.strip()) < 80:
         return "Rejected as a broad theme, narrative framing, character description, or generic topic."
+    if result.concept_classification == "speculative_connection":
+        return "This is a plausible speculative connection, not an automatically verified discovery. Review it and keep it if it is worth exploring."
+    if result.concept_classification == "established_concept" and result.label_kind != "established_term":
+        return "An established concept must use terminology independently established by its evidence."
+    if result.concept_classification == "grounded_interpretation" and result.relationship_verification == "unverified":
+        return "A grounded interpretation requires work evidence supporting the interpretation."
+    if result.mechanism_defensibility == "unsupported":
+        return "The proposed mechanism is not defensible from the supplied evidence."
     normalized_title = re.sub(r"[^a-z0-9]+", " ", work_title.casefold()).strip()
     if normalized_title and normalized_title in re.sub(r"[^a-z0-9]+", " ", name):
         return "The proposed label is tied to this work rather than transferable to other contexts."
@@ -140,7 +153,9 @@ def concept_quality_rejection(result: ValidatedConcept, work_source_ids: set[str
     for reference in result.concept_evidence:
         evidence = re.sub(r"[^a-z0-9]+", " ", reference.excerpt.lower()).strip()
         source_text = re.sub(r"[^a-z0-9]+", " ", concept_source_text[reference.source_id].lower()).strip()
-        if len(evidence.split()) < 8 or evidence not in source_text:
+        if len(evidence.split()) < 8:
+            return "The definition evidence is too short to substantiate the concept."
+        if reference.evidence_form == "quotation" and evidence not in source_text:
             return "The definition evidence is not a substantive verbatim excerpt from its referenced concept source."
     discovery_ids = set(result.discovery_source_ids)
     if not discovery_ids or not discovery_ids <= set(concept_source_text):
