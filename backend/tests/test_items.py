@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ValidatedConcept, WorkUnderstanding
-from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, app, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept
+from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, app, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
 from app.quality import candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from app.research import ResearchPacket, RetrievedSource, get_research_provider
 
@@ -644,6 +644,10 @@ class WorkFirstDiscoveryAI(FakeAI):
             research_queries=[], discovery_mode="deepen_fascination" if index % 2 else "reveal_overlooked_perspective",
             external_research_warranted=False,
             discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "high" if index % 2 else "medium", "rationale": "A specific work-grounded mechanism."},
+            mechanism=f"The concrete constraint changes attention and choices: {detail}",
+            curiosity_invitation=f"What becomes possible when this specific constraint changes how people interpret the situation in {label.lower()}?",
+            appeal_dimensions=["clever"] if kind in {"narrative_structure", "tone_or_humor"} else ["thought_provoking"],
+            pattern_scope="single_work",
         ) for index, (kind, label, detail) in enumerate(anchors, 1)])
 
 
@@ -741,6 +745,9 @@ def test_work_first_acceptance_examples_produce_specific_standalone_discoveries(
     assert all(concept["evidence_status"] == "work_supported" for concept in discoveries)
     assert all(concept["discovery_quality"]["intellectual_substance"] == "high" for concept in discoveries)
     assert {concept["discovery_mode"] for concept in discoveries} == {"deepen_fascination", "reveal_overlooked_perspective"}
+    assert all(concept["mechanism"] and concept["curiosity_hook"].endswith("?") for concept in discoveries)
+    assert all(concept["appeal_dimensions"] for concept in discoveries)
+    assert {concept["pattern_scope"] for concept in discoveries} == {"single_work"}
 
 
 def test_anchor_and_research_limits_are_bounded_and_configurable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -847,6 +854,54 @@ def test_love_and_surprise_survive_only_exact_observation_reruns(client: TestCli
     changed = client.post(f"/api/items/{item_id}/enrich").json()
     unrelated = next(concept for concept in changed["concepts"] if concept["name"] == target["name"])
     assert unrelated["loved"] is False and unrelated["surprised"] is False
+
+
+def test_curiosity_profile_uses_only_explicit_positive_feedback_and_authored_lenses(client: TestClient) -> None:
+    item_id = create_item(client, title="Castle", kind="tv_series").json()["id"]
+    manual = client.post(f"/api/items/{item_id}/concepts", json={"name": "Playful mysteries", "category": "personal"})
+    assert manual.status_code == 201
+    app.dependency_overrides[get_ai_client] = lambda: WorkFirstDiscoveryAI()
+    app.dependency_overrides[get_research_provider] = lambda: WorkOnlyResearch()
+    discoveries = client.post(f"/api/items/{item_id}/enrich").json()["concepts"]
+    humor = next(concept for concept in discoveries if concept["name"] == "Humor as investigative friction")
+    feedback = client.patch(f"/api/concepts/{humor['id']}/feedback", json={
+        "signal": "love", "active": True, "note": "I love the technology angle, but humor matters too.",
+    })
+    assert feedback.status_code == 200
+
+    profile = client.get("/api/discovery-profile")
+
+    assert profile.status_code == 200
+    body = profile.json()
+    assert body["authored_lenses"] == ["Playful mysteries"]
+    clever = next(entry for entry in body["hypotheses"] if entry["label"] == "clever")
+    assert clever["signals"]["love"] == 1
+    assert clever["notes"] == ["I love the technology angle, but humor matters too."]
+    assert body["exploration_budget"] == 1
+
+
+def test_profile_context_reaches_discovery_without_becoming_evidence(client: TestClient) -> None:
+    first_id = create_item(client, title="Castle", kind="tv_series").json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: WorkFirstDiscoveryAI()
+    app.dependency_overrides[get_research_provider] = lambda: WorkOnlyResearch()
+    first = client.post(f"/api/items/{first_id}/enrich").json()
+    humor = next(concept for concept in first["concepts"] if concept["name"] == "Humor as investigative friction")
+    assert client.patch(f"/api/concepts/{humor['id']}/feedback", json={"signal": "love", "active": True}).status_code == 200
+    captured: list[dict[str, object]] = []
+
+    class ProfileAwareAI(WorkFirstDiscoveryAI):
+        def understand_work(self, item: dict[str, object], synthesis: str, sources: list[dict[str, str]]) -> WorkUnderstanding:
+            captured.append(item)
+            return super().understand_work(item, synthesis, sources)
+
+    second_id = create_item(client, title="A Psalm for the Wild-Built").json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: ProfileAwareAI()
+    second = client.post(f"/api/items/{second_id}/enrich")
+
+    assert second.status_code == 200
+    assert captured and captured[0]["curiosity_profile"]["hypotheses"]
+    # Work support remains the only evidence for grounded observations.
+    assert all(concept["source_support"] for concept in second.json()["concepts"] if concept["concept_classification"] == "grounded_observation")
 
 
 def test_manual_feedback_does_not_transfer_to_generated_observation_with_same_label(client: TestClient) -> None:
@@ -1243,6 +1298,31 @@ def test_research_problem_requires_work_evidence_and_descriptive_queries() -> No
 
     title_anchored = problem.model_copy(update={"research_queries": ["A Fictional Work abductive reasoning"]})
     assert "work title" in (research_problem_rejection(title_anchored, {"work-1"}, "A Fictional Work") or "")
+    generic_invitation = problem.model_copy(update={"curiosity_invitation": "What can we learn from this theme?"})
+    assert "generic theme" in (research_problem_rejection(generic_invitation, {"work-1"}, "A Fictional Work") or "")
+
+
+def test_personalized_anchor_selection_preserves_an_unfamiliar_direction(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISCOVERY_MAX_ANCHORS", "3")
+    anchors = []
+    for index, label in enumerate(("Privacy system", "Security tradeoff", "Technology constraint", "Quiet companionship"), 1):
+        anchors.append(ResearchProblem(
+            problem_id=f"p{index}", concrete_description=f"A specific grounded situation involving {label.lower()} changes a consequential choice.",
+            work_situation=f"The work source describes the concrete operation and consequence of {label.lower()}.",
+            intellectual_question=f"What follows when {label.lower()} changes how the characters understand their available choices?",
+            relevant_domains=["systems"], evidence_source_ids=["work-1"], research_queries=[],
+            concise_label=label, interesting_reason=f"The detail makes {label.lower()} visible through a specific choice and its consequences.",
+            distinctiveness=f"This is a concrete {label.lower()} mechanism rather than a broad genre theme.",
+            external_research_warranted=False, mechanism=f"A constraint involving {label.lower()} changes information, incentives, and behavior.",
+            curiosity_invitation=f"When can {label.lower()} produce an outcome that its participants did not intend?",
+            appeal_dimensions=["thought_provoking"],
+            discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "medium", "rationale": "Grounded and specific."},
+        ))
+
+    selected, _ = select_diverse_anchors(anchors, {"privacy", "security", "technology"})
+
+    assert len(selected) == 3
+    assert any(anchor.concise_label == "Quiet companionship" for anchor in selected)
 
 
 def test_concept_quality_gate_separates_concept_and_relationship_evidence() -> None:

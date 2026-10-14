@@ -48,6 +48,7 @@ If an earlier installation has `backend/curiosity.db`, Asterisk copies it to the
 
 - `GET /api/health`
 - `GET /api/items?q=&kind=` — search/filter
+- `GET /api/discovery-profile` — inspect working hypotheses derived from explicit positive feedback
 - `POST /api/items` — add
 - `PATCH /api/items/{id}` — edit
 - `DELETE /api/items/{id}` — delete
@@ -89,6 +90,8 @@ Research defaults to premise-only material when progress is unknown. A saved pro
 
 After identity resolution, enrichment first identifies several specific anchors inside the work: character tensions, worldbuilding rules, narrative techniques, recurring motifs, striking systems, or revealing situations. It deterministically selects a diverse set of roughly 3–5 grounded observations, then researches only the strongest configured subset. `DISCOVERY_MAX_ANCHORS` defaults to `5` and `DISCOVERY_MAX_RESEARCH_ANCHORS` defaults to `3`. This selection adds no model call, and grounded observations remain useful discoveries even when they do not lead to an external academic concept or Sidequest.
 
+Each grounded observation separately records the concrete detail, the mechanism or dynamic that makes it interesting, a specific curiosity invitation, its appeal dimensions, and whether it describes one work, a creator/series pattern, a genre convention, or a possible cross-domain direction. Generic curiosity questions are rejected before persistence. These labels describe epistemic and discovery roles; they do not upgrade an interpretation into a fact.
+
 The selected observations support two discovery modes: **deepen fascination**, which follows something already compelling in the work, and **reveal an overlooked perspective**, which surfaces a less obvious lens. External research still uses bounded OpenRouter work research, evidence-grounded concept extraction, and relationship validation. Search-tool charges and ordinary model token charges apply. If external research fails, Asterisk does not invent a concept; the separately work-supported observations remain available. Research permits full spoilers only when the item is marked finished/re-reading/rewatching or the user explicitly allows them.
 
 Extraction scans the full independent research corpus, not only passages that answer the first research problems. Accepted results distinguish **From the work** (`work_grounded`) from **Found while exploring** (`research_led`). Research-led concepts need independent definition and mechanism evidence plus a traceable research path, but may honestly report that no direct relationship to the saved work was established.
@@ -98,6 +101,8 @@ When a promising candidate fails only because its evidence cannot be verified, A
 Concept extraction is always user-triggered. Quick extraction uses only the saved entry and is labeled accordingly. Research results distinguish **Established concept**, **Grounded interpretation**, and **Speculative connection**. A generated interpretive label does not need to appear verbatim when its underlying mechanism and relationship are supported. Actual quotations remain subject to exact source-text checks; clearly labeled cited paraphrases may use different wording but still require a retrieved, substantive source and structured validation. Speculative connections remain in review unless the user explicitly keeps them.
 
 Rejected concept candidates can be reviewed in the Research & Concepts drawer. **Interested**, **Love**, and **Surprise** are independent from **Keep anyway**, **Dismiss**, and **Re-evaluate**: they record personal discovery value without asserting truth. Feedback is copied across reruns only when a stable fingerprint of the underlying finding matches; similar titles alone are not enough. Keep anyway creates a non-canonical discovery labeled **User-kept · Unverified** or **User-kept · Partially supported** without changing the automated rejection. Reversible review history and evidence outcomes remain intact. User-kept concepts are available to exploratory features, while their sources are deliberately withheld as claim-supporting evidence and they remain outside verified-only workflows.
+
+A lightweight curiosity profile is derived locally from active Love, Surprise, and Interested signals, their optional notes, and user-authored concepts. It is a transparent working hypothesis—not a permanent taste label. It can modestly influence anchor ordering, but cannot act as evidence, infer dislike from silence or dismissal, or consume the reserved unfamiliar-direction slot.
 
 Sidequests require discoveries attached to at least two library items. Interest, Love, and Surprise contribute separate bounded ranking signals, while mechanism depth, grounded discoveries, domain/type diversity, and repetition penalties keep one clicked topic from dominating. Ranking never upgrades verification, and it retains an unfeedbacked exploration slot when possible. The two items may have the same type, and the critic still rejects connections that are too obvious or superficial. Every saved Sidequest remains exploratory and externally unverified.
 

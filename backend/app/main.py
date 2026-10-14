@@ -150,6 +150,8 @@ class ItemConcept(Base):
     feedback_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     discovery_mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
     discovery_quality_json: Mapped[str] = mapped_column(Text, default="{}")
+    appeal_dimensions_json: Mapped[str] = mapped_column(Text, default="[]")
+    pattern_scope: Mapped[str | None] = mapped_column(String(40), nullable=True)
     spoiler_scope: Mapped[str] = mapped_column(String(30), default="premise_only")
     interested: Mapped[bool] = mapped_column(default=False)
     interest_note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -383,6 +385,8 @@ class ConceptRead(BaseModel):
     feedback_key: str | None
     discovery_mode: str | None
     discovery_quality: dict[str, object] = Field(default_factory=dict)
+    appeal_dimensions: list[str] = Field(default_factory=list)
+    pattern_scope: str | None
     spoiler_scope: str
     interested: bool
     interest_note: str | None
@@ -511,6 +515,12 @@ class DiscoveryFeedbackUpdate(BaseModel):
     active: bool
     note: str | None = Field(default=None, max_length=2000)
 
+
+class CuriosityProfileRead(BaseModel):
+    hypotheses: list[dict[str, object]] = Field(default_factory=list)
+    authored_lenses: list[str] = Field(default_factory=list)
+    exploration_budget: int = 1
+
 def normalize_url(value: str | None) -> str | None:
     if value is None or not value.strip():
         return None
@@ -528,7 +538,7 @@ def migrate_additive_columns(target_engine=engine, database_url: str = DATABASE_
         return
     additions = {
         "curiosity_items": {"creator": "VARCHAR(300)", "release_year": "INTEGER", "work_scope": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "parent_work_title": "VARCHAR(300)", "canonical_identity_id": "VARCHAR(300)", "progress_status": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "progress_current": "INTEGER", "progress_total": "INTEGER", "progress_unit": "VARCHAR(30) NOT NULL DEFAULT 'installment'", "spoiler_policy": "VARCHAR(30) NOT NULL DEFAULT 'avoid'"},
-        "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "relationship_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "spoiler_scope": "VARCHAR(30) NOT NULL DEFAULT 'premise_only'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME", "superseded_at": "DATETIME"},
+        "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "appeal_dimensions_json": "TEXT NOT NULL DEFAULT '[]'", "pattern_scope": "VARCHAR(40)", "spoiler_scope": "VARCHAR(30) NOT NULL DEFAULT 'premise_only'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME", "superseded_at": "DATETIME"},
         "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'"},
         "concept_sources": {"support_kind": "VARCHAR(20) NOT NULL DEFAULT 'relationship'"},
         "canonical_concepts": {"aliases_json": "TEXT NOT NULL DEFAULT '[]'", "label_kind": "VARCHAR(30) NOT NULL DEFAULT 'established_term'"},
@@ -613,6 +623,7 @@ def concept_read(concept: ItemConcept, db: Session) -> ConceptRead:
         concept_classification=concept.concept_classification, evidence_form=concept.evidence_form,
         feedback_key=concept.feedback_key, discovery_mode=concept.discovery_mode,
         discovery_quality=json.loads(concept.discovery_quality_json or "{}"),
+        appeal_dimensions=json.loads(concept.appeal_dimensions_json or "[]"), pattern_scope=concept.pattern_scope,
         spoiler_scope=concept.spoiler_scope,
         interested=concept.interested, interest_note=concept.interest_note, interested_at=concept.interested_at,
         loved=concept.loved, love_note=concept.love_note, loved_at=concept.loved_at,
@@ -859,22 +870,83 @@ def synchronize_feedback(item_id: int, feedback_key: str | None, name: str, sign
         setattr(entry, time_field, at if active else None)
 
 
+def curiosity_profile(db: Session) -> dict[str, object]:
+    """Derive editable-by-action working hypotheses from explicit positive signals only."""
+    concepts = db.scalars(select(ItemConcept).order_by(ItemConcept.id.desc())).all()
+    authored_lenses = []
+    seen_authored: set[str] = set()
+    for concept in concepts:
+        if concept.origin == ConceptOrigin.user.value and concept.superseded_at is None:
+            normalized = normalize_concept_term(concept.name)
+            if normalized and normalized not in seen_authored:
+                seen_authored.add(normalized)
+                authored_lenses.append(concept.name)
+
+    # One stable finding contributes once even if prior reruns remain in audit history.
+    seen_feedback: set[str] = set()
+    grouped: dict[str, dict[str, object]] = {}
+    for concept in concepts:
+        if not (concept.interested or concept.loved or concept.surprised):
+            continue
+        fingerprint = concept.feedback_key or f"concept:{concept.id}"
+        if fingerprint in seen_feedback:
+            continue
+        seen_feedback.add(fingerprint)
+        dimensions = json.loads(concept.appeal_dimensions_json or "[]")
+        labels = dimensions or ([concept.domain] if concept.domain else [concept.name])
+        weight = int(concept.interested) + 2 * int(concept.loved) + int(concept.surprised)
+        notes = [note for note in (concept.interest_note, concept.love_note, concept.surprise_note) if note]
+        for label in labels:
+            key = normalize_concept_term(str(label))
+            if not key:
+                continue
+            entry = grouped.setdefault(key, {"label": str(label).replace("_", " "), "score": 0, "signals": {"interested": 0, "love": 0, "surprise": 0}, "notes": []})
+            entry["score"] = int(entry["score"]) + weight
+            signals = entry["signals"]
+            if isinstance(signals, dict):
+                signals["interested"] = int(signals["interested"]) + int(concept.interested)
+                signals["love"] = int(signals["love"]) + int(concept.loved)
+                signals["surprise"] = int(signals["surprise"]) + int(concept.surprised)
+            saved_notes = entry["notes"]
+            if isinstance(saved_notes, list):
+                for note in notes:
+                    if note not in saved_notes and len(saved_notes) < 3:
+                        saved_notes.append(note)
+    hypotheses = sorted(grouped.values(), key=lambda entry: (-int(entry["score"]), str(entry["label"])))[:8]
+    return {"hypotheses": hypotheses, "authored_lenses": authored_lenses[:8], "exploration_budget": 1}
+
+
+def profile_terms(profile: dict[str, object]) -> set[str]:
+    stop = {"and", "the", "with", "from", "into", "about", "this", "that", "concept", "general"}
+    material = " ".join([
+        *(str(entry.get("label", "")) for entry in profile.get("hypotheses", []) if isinstance(entry, dict)),
+        *(str(value) for value in profile.get("authored_lenses", [])),
+    ])
+    return set(normalize_concept_term(material).split()) - stop
+
+
 def discovery_limits() -> tuple[int, int]:
     selected = max(3, min(int(os.getenv("DISCOVERY_MAX_ANCHORS", "5")), 5))
     researched = max(0, min(int(os.getenv("DISCOVERY_MAX_RESEARCH_ANCHORS", "3")), selected))
     return selected, researched
 
 
-def select_diverse_anchors(problems) -> tuple[list[object], list[object]]:
+def select_diverse_anchors(problems, personal_terms: set[str] | None = None) -> tuple[list[object], list[object]]:
     """Select strong anchors without another model call; keep the factors inspectable."""
     selected_limit, research_limit = discovery_limits()
     quality_order = {"high": 2, "medium": 1, "low": 0}
 
-    def factors(anchor) -> tuple[int, int, int, int, int]:
+    personal_terms = personal_terms or set()
+
+    def relevance(anchor) -> int:
+        material = normalize_concept_term(" ".join((anchor.concise_label, anchor.mechanism, anchor.interesting_reason, *anchor.appeal_dimensions)))
+        return min(2, len(set(material.split()) & personal_terms))
+
+    def factors(anchor) -> tuple[int, int, int, int, int, int]:
         quality = anchor.discovery_quality
         return (
             quality_order[quality.specificity], quality_order[quality.intellectual_substance],
-            quality_order[quality.surprise_potential], len(anchor.evidence_source_ids),
+            relevance(anchor), quality_order[quality.surprise_potential], len(anchor.evidence_source_ids),
             len(anchor.interesting_reason.strip()),
         )
 
@@ -888,6 +960,10 @@ def select_diverse_anchors(problems) -> tuple[list[object], list[object]]:
         selected.append(candidate)
         used_kinds.add(candidate.anchor_kind)
         used_modes.add(candidate.discovery_mode)
+    if personal_terms and selected and all(relevance(anchor) > 0 for anchor in selected):
+        unfamiliar = next((anchor for anchor in ranked if relevance(anchor) == 0 and anchor.discovery_quality.specificity != "low" and anchor.discovery_quality.intellectual_substance != "low"), None)
+        if unfamiliar is not None:
+            selected[-1] = unfamiliar
     researchable = [anchor for anchor in selected if anchor.external_research_warranted][:research_limit]
     return selected, researchable
 
@@ -924,6 +1000,11 @@ def resolve_canonical_concept(db: Session, name: str, aliases: list[str], defini
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/discovery-profile", response_model=CuriosityProfileRead)
+def get_discovery_profile(db: Session = Depends(get_db)):
+    return curiosity_profile(db)
 
 @app.get("/api/items", response_model=list[ItemRead])
 def list_items(q: str = Query(default="", max_length=240), kind: Kind | None = None, db: Session = Depends(get_db)):
@@ -1136,7 +1217,9 @@ def extract_concepts(item_id: int, db: Session = Depends(get_db), ai: OpenRouter
     if item is None:
         raise HTTPException(404, "Item not found")
     try:
-        extraction = ai.extract_concepts(item_ai_payload(item))
+        payload = item_ai_payload(item)
+        payload["curiosity_profile"] = curiosity_profile(db)
+        extraction = ai.extract_concepts(payload)
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc
     now = datetime.now(timezone.utc)
@@ -1252,6 +1335,8 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
     if item is None:
         raise HTTPException(404, "Item not found")
     payload = item_ai_payload(item)
+    profile = curiosity_profile(db)
+    payload["curiosity_profile"] = profile
     enrichment = db.get(ItemEnrichment, item_id)
     try:
         packet = None
@@ -1281,7 +1366,7 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
         work_source_payloads = [{"source_id": f"work-{index}", "title": source.title, "excerpt": source.excerpt[:2500]} for index, source in enumerate(packet.sources, 1)]
         work_source_urls = {payload["source_id"]: source.url for payload, source in zip(work_source_payloads, packet.sources)}
         understanding = ai.understand_work(payload, packet.synthesis, work_source_payloads)
-        understanding = understanding.model_copy(update={"spoiler_ceiling": spoiler_ceiling(item)})
+        understanding = understanding.model_copy(update={"spoiler_ceiling": spoiler_ceiling(item), "curiosity_profile": profile})
         if item.kind in {Kind.concept.value, Kind.question.value, Kind.thought.value}:
             understanding = understanding.model_copy(update={"ambiguous_identity": False, "confirmation_question": "", "resolved_title": understanding.resolved_title or item.title, "identity_matches_sources": True})
     except (AIConfigurationError, AIProviderError) as exc:
@@ -1313,7 +1398,7 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             raise AIProviderError(f"Work-anchor validation failed: {problem_reason} Existing research was preserved.")
         if any(not anchor_within_spoiler_scope(problem, item) for problem in proposed_anchors.problems):
             raise AIProviderError("Work-anchor validation failed: a proposed observation exceeds the saved spoiler boundary. Existing research was preserved.")
-        selected_anchors, research_anchors = select_diverse_anchors(proposed_anchors.problems)
+        selected_anchors, research_anchors = select_diverse_anchors(proposed_anchors.problems, profile_terms(profile))
         # The internal research subset may intentionally be empty: grounded
         # observations do not need external research to be worth preserving.
         problems = ResearchProblemBatch.model_construct(problems=research_anchors)
@@ -1463,17 +1548,18 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
         observation = ItemConcept(
             item_id=item_id, name=label, canonical_name=label, category="mechanism", origin="ai",
             explanation=anchor.concrete_description, definition=anchor.concrete_description,
-            domain=anchor.anchor_kind.replace("_", " "), mechanism=anchor.interesting_reason,
+            domain=anchor.anchor_kind.replace("_", " "), mechanism=anchor.mechanism or anchor.interesting_reason,
             level="mechanism", relationship=anchor.work_situation, relationship_type="explicit",
             relationship_evidence=anchor.work_situation, evidence_status="work_supported",
             concept_verification="work_supported", relationship_verification="verified",
-            label_kind="descriptive_label", curiosity_hook=anchor.intellectual_question,
+            label_kind="descriptive_label", curiosity_hook=anchor.curiosity_invitation or anchor.intellectual_question,
             discovery_origin="work_grounded", research_path=anchor.distinctiveness,
             discovery_source_ids_json=json.dumps(anchor.evidence_source_ids),
             initial_validation_outcome="Work-source evidence and anchor specificity passed deterministic checks.",
             final_validation_outcome="Grounded observation accepted independently of external concept research.",
             review_audit_id=audit.id, concept_classification="grounded_observation", evidence_form="paraphrase",
             discovery_mode=anchor.discovery_mode, discovery_quality_json=quality_json,
+            appeal_dimensions_json=json.dumps(anchor.appeal_dimensions), pattern_scope=anchor.pattern_scope,
             spoiler_scope=anchor.spoiler_scope, **feedback,
         )
         db.add(observation)

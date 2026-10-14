@@ -31,6 +31,14 @@ def research_problem_rejection(problem: ResearchProblem, work_source_ids: set[st
         return "The work anchor does not clearly state what makes the concrete detail interesting."
     if len(problem.distinctiveness.strip()) < 25:
         return "The work anchor does not explain why it is distinctive rather than a generic theme."
+    mechanism = (problem.mechanism or problem.interesting_reason).strip()
+    if len(mechanism) < 35:
+        return "The work anchor does not explain a concrete mechanism, tension, rule, or emotional dynamic."
+    invitation = (problem.curiosity_invitation or problem.intellectual_question).strip()
+    if len(invitation) < 30:
+        return "The curiosity invitation is too vague to open a meaningful direction."
+    if re.search(r"^(?:how does this (?:influence|affect)|why is this important|what can we learn|how do relationships affect)", invitation, re.I):
+        return "The curiosity invitation restates a generic theme instead of opening a specific exploration."
     if problem.external_research_warranted and not problem.research_queries:
         return "The work anchor requests external research without a descriptive search query."
     generic_anchor = re.sub(r"[^a-z0-9]+", " ", f"{problem.concise_label} {problem.concrete_description}".casefold())

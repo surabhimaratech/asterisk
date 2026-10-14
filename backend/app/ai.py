@@ -118,6 +118,7 @@ class WorkUnderstanding(BaseModel):
     narrative_structures_and_techniques: list[str] = Field(default_factory=list, max_length=8)
     tone_humor_and_motifs: list[str] = Field(default_factory=list, max_length=8)
     spoiler_ceiling: Literal["premise_only", "within_progress", "full"] = "premise_only"
+    curiosity_profile: dict[str, object] = Field(default_factory=dict)
 
 
 class DiscoveryQuality(BaseModel):
@@ -147,6 +148,10 @@ class ResearchProblem(BaseModel):
     external_research_warranted: bool = True
     discovery_quality: DiscoveryQuality = Field(default_factory=DiscoveryQuality)
     spoiler_scope: Literal["premise_only", "within_progress", "full"] = "premise_only"
+    mechanism: str = Field(default="", max_length=1000)
+    curiosity_invitation: str = Field(default="", max_length=500)
+    appeal_dimensions: list[Literal["fascinating", "funny", "beautiful", "strange", "emotionally_resonant", "clever", "unexpected", "comforting", "thought_provoking"]] = Field(default_factory=list, max_length=4)
+    pattern_scope: Literal["single_work", "creator_or_series_pattern", "genre_convention", "cross_domain_possibility"] = "single_work"
 
 
 class ResearchProblemBatch(BaseModel):
