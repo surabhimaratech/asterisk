@@ -573,6 +573,37 @@ def test_sidequest_allows_two_items_of_the_same_type(client: TestClient) -> None
     assert {created.json()["item_a_id"], created.json()["item_b_id"]} == {first, second}
 
 
+def test_sidequest_can_open_a_deduplicated_direction_from_one_random_thought(client: TestClient) -> None:
+    thought_id = create_item(client, kind="thought", title="What if maps remembered where we hesitated?").json()["id"]
+    client.post(f"/api/items/{thought_id}/concepts", json={"name": "Hesitation as spatial data", "category": "mechanism"})
+
+    class SingleDirectionAI(FakeAI):
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            single = next(context for context in contexts if context["mode"] == "single_item_direction")
+            item_id = single["item_a"]["id"]  # type: ignore[index]
+            return CandidateBatch(candidates=[ConnectionCandidate(
+                item_a_id=item_id, item_b_id=item_id, origin_item_ids=[item_id],
+                discovery_kind="creative_impulse", title="A map of almost-chosen paths",
+                invitation="Trace the places where uncertainty changed your route.",
+                connection="Recording hesitation could turn a route map into a portrait of decisions that nearly happened.",
+                bridge="Spatial traces of unrealized decisions", why_interesting="It treats uncertainty as information rather than noise.",
+                where_it_breaks="A pause can reflect distraction, access barriers, or sensor error rather than meaningful uncertainty.",
+                new_question="What would a map reveal if it preserved abandoned routes as carefully as completed ones?",
+            )])
+
+    app.dependency_overrides[get_ai_client] = lambda: SingleDirectionAI()
+    created = client.post("/api/sidequests/surprise")
+    repeated = client.post("/api/sidequests/surprise")
+
+    assert created.status_code == 201
+    assert created.json()["origin_item_ids"] == [thought_id]
+    assert created.json()["origin_titles"] == ["What if maps remembered where we hesitated?"]
+    assert created.json()["discovery_kind"] == "creative_impulse"
+    assert created.json()["invitation"] == "Trace the places where uncertainty changed your route."
+    assert repeated.status_code == 422
+    assert "already been explored" in repeated.json()["detail"]
+
+
 def test_sidequest_insufficient_data_and_rejected_candidate(client: TestClient) -> None:
     assert client.post("/api/sidequests/surprise").status_code == 422
     first = create_item(client).json()["id"]
@@ -1212,11 +1243,13 @@ def test_additive_migration_preserves_ids_and_only_recategorizes_known_tv_titles
         p0_defaults = connection.exec_driver_sql("SELECT work_scope, progress_status, progress_unit, spoiler_policy FROM curiosity_items WHERE id = 2").fetchone()
         p0_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(curiosity_items)").fetchall()}
         invitation_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(exploration_invitations)").fetchall()}
+        sidequest_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(sidequests)").fetchall()}
     assert rows == [(1, "tv_series", "Castle"), (2, "movie", "An Ambiguous Title"), (3, "tv_series", "Game of Thrones")]
     assert preserved == (1, 1, 1, "needs_confirmation", 0, 0)
     assert p0_defaults == ("unknown", "unknown", "installment", "avoid")
     assert {"work_scope", "parent_work_title", "canonical_identity_id", "progress_status", "progress_current", "progress_total", "progress_unit", "spoiler_policy"} <= p0_columns
     assert {"item_id", "source_concept_id", "source_feedback_key", "question", "status", "user_note"} <= invitation_columns
+    assert {"origin_item_ids_json", "discovery_kind", "invitation", "dedupe_key"} <= sidequest_columns
 
     with migration_engine.begin() as connection:
         connection.exec_driver_sql("INSERT INTO curiosity_items (id, kind, title) VALUES (4, 'movie', 'Castle')")
@@ -1334,7 +1367,7 @@ def test_love_and_surprise_shape_sidequests_without_overriding_verification_or_e
         pairs: list[tuple[int, int]] = []
 
         def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
-            self.pairs = [(pair["item_a"]["id"], pair["item_b"]["id"]) for pair in pairs]  # type: ignore[index]
+            self.pairs = [(pair["item_a"]["id"], pair["item_b"]["id"]) for pair in pairs if pair["item_b"] is not None]  # type: ignore[index]
             return super().generate_candidates(pairs)
 
     ai = CapturingAI()

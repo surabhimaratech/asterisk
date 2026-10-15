@@ -260,6 +260,9 @@ class ConnectionCandidate(BaseModel):
     why_interesting: str = Field(min_length=1, max_length=900)
     where_it_breaks: str = Field(min_length=1, max_length=900)
     new_question: str = Field(min_length=1, max_length=400)
+    origin_item_ids: list[int] = Field(default_factory=list, min_length=1, max_length=4)
+    discovery_kind: Literal["new_obsession", "unexpected_connection", "experiment", "new_lens", "creative_impulse"] = "unexpected_connection"
+    invitation: str = Field(default="", max_length=300)
 
 
 class CandidateBatch(BaseModel):
@@ -282,6 +285,9 @@ class CritiquedConnection(BaseModel):
     evidence_status: str
     concepts_used: list[str] = Field(max_length=8)
     evidence: list[str] = Field(max_length=8)
+    origin_item_ids: list[int] = Field(default_factory=list, min_length=1, max_length=4)
+    discovery_kind: Literal["new_obsession", "unexpected_connection", "experiment", "new_lens", "creative_impulse"] = "unexpected_connection"
+    invitation: str = Field(default="", max_length=300)
 
 
 class OpenRouterClient:

@@ -196,6 +196,10 @@ class Sidequest(Base):
     evidence_status: Mapped[str] = mapped_column(String(240))
     concepts_json: Mapped[str] = mapped_column(Text, default="[]")
     evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    origin_item_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    discovery_kind: Mapped[str] = mapped_column(String(40), default="unexpected_connection")
+    invitation: Mapped[str] = mapped_column(String(300), default="")
+    dedupe_key: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class ItemEnrichment(Base):
@@ -480,6 +484,10 @@ class SidequestRead(BaseModel):
     evidence_status: str
     concepts_used: list[str]
     evidence: list[str]
+    origin_item_ids: list[int]
+    origin_titles: list[str]
+    discovery_kind: str
+    invitation: str
     created_at: datetime
 
 
@@ -577,7 +585,7 @@ def migrate_additive_columns(target_engine=engine, database_url: str = DATABASE_
     additions = {
         "curiosity_items": {"creator": "VARCHAR(300)", "release_year": "INTEGER", "work_scope": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "parent_work_title": "VARCHAR(300)", "canonical_identity_id": "VARCHAR(300)", "progress_status": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "progress_current": "INTEGER", "progress_total": "INTEGER", "progress_unit": "VARCHAR(30) NOT NULL DEFAULT 'installment'", "spoiler_policy": "VARCHAR(30) NOT NULL DEFAULT 'avoid'"},
         "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "appeal_dimensions_json": "TEXT NOT NULL DEFAULT '[]'", "pattern_scope": "VARCHAR(40)", "spoiler_scope": "VARCHAR(30) NOT NULL DEFAULT 'premise_only'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME", "superseded_at": "DATETIME"},
-        "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'"},
+        "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'", "origin_item_ids_json": "TEXT NOT NULL DEFAULT '[]'", "discovery_kind": "VARCHAR(40) NOT NULL DEFAULT 'unexpected_connection'", "invitation": "VARCHAR(300) NOT NULL DEFAULT ''", "dedupe_key": "VARCHAR(64)"},
         "concept_sources": {"support_kind": "VARCHAR(20) NOT NULL DEFAULT 'relationship'"},
         "canonical_concepts": {"aliases_json": "TEXT NOT NULL DEFAULT '[]'", "label_kind": "VARCHAR(30) NOT NULL DEFAULT 'established_term'"},
         "concept_lead_audits": {"stage": "VARCHAR(30) NOT NULL DEFAULT 'concept_candidate'", "discovery_origin": "VARCHAR(30)", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "research_path": "TEXT", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "candidate_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "validation_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "automated_evidence_status": "VARCHAR(30) NOT NULL DEFAULT 'unverified'", "human_review_status": "VARCHAR(20) NOT NULL DEFAULT 'pending'", "human_review_note": "TEXT", "review_history_json": "TEXT NOT NULL DEFAULT '[]'", "kept_concept_id": "INTEGER", "last_evaluated_at": "DATETIME", "evidence_review_detail": "TEXT", "superseded_at": "DATETIME", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME"},
@@ -632,12 +640,16 @@ def sidequest_rejection_detail(reason: str | None = None) -> str:
 def sidequest_read(sidequest: Sidequest, db: Session) -> SidequestRead:
     item_a = db.get(CuriosityItem, sidequest.item_a_id)
     item_b = db.get(CuriosityItem, sidequest.item_b_id)
+    origin_ids = json.loads(sidequest.origin_item_ids_json or "[]") or list(dict.fromkeys((sidequest.item_a_id, sidequest.item_b_id)))
+    origin_items = [db.get(CuriosityItem, item_id) for item_id in origin_ids]
     return SidequestRead(
         **{column.name: getattr(sidequest, column.name) for column in Sidequest.__table__.columns},
         item_a_title=item_a.title if item_a else "Deleted curiosity",
         item_b_title=item_b.title if item_b else "Deleted curiosity",
         concepts_used=json.loads(sidequest.concepts_json or "[]"),
         evidence=json.loads(sidequest.evidence_json or "[]"),
+        origin_item_ids=origin_ids,
+        origin_titles=[item.title if item else "Deleted curiosity" for item in origin_items],
     )
 
 
@@ -1808,7 +1820,7 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         if active_concept is not None:
             invitation_by_concept[active_concept.id] = invitation
     researched_ids = set(db.scalars(select(ItemEnrichment.item_id).where(ItemEnrichment.status == "researched")).all())
-    eligible = [item for item in items if by_item.get(item.id) and (not researched_ids or item.id in researched_ids)]
+    eligible = [item for item in items if by_item.get(item.id) and (not researched_ids or item.id in researched_ids or item.kind in {Kind.concept.value, Kind.question.value, Kind.thought.value})]
     previous_terms = set()
     for saved_concepts in db.scalars(select(Sidequest.concepts_json)).all():
         for name in json.loads(saved_concepts or "[]"):
@@ -1847,28 +1859,55 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         return (score, -item_a.id, -item_b.id)
 
     pairs = sorted(combinations(eligible, 2), key=pair_score, reverse=True)
-    if not pairs:
-        raise HTTPException(422, "Add concepts to at least two curiosities before asking for a Sidequest.")
     selected_pairs = pairs[:5]
     exploration_pair = next((pair for pair in pairs if pair not in selected_pairs and not any((concept.interested or concept.loved or concept.surprised) for item in pair for concept in by_item[item.id])), None)
     if exploration_pair is not None:
         selected_pairs.append(exploration_pair)
-    pair_payloads = []
-    allowed_pairs: set[frozenset[int]] = set()
+    def item_score(item: CuriosityItem) -> tuple[int, int]:
+        item_concepts = by_item[item.id]
+        score = (
+            (5 if item.kind == Kind.thought.value else 0)
+            + min(2, sum(1 for concept in item_concepts if concept.id in invitation_by_concept)) * 4
+            + sum(int(concept.interested) + 2 * int(concept.loved) + int(concept.surprised) for concept in item_concepts)
+            + sum(1 for concept in item_concepts if concept.level == "mechanism" or concept.category == "mechanism")
+        )
+        return (score, -item.id)
+
+    selected_singles = sorted(eligible, key=item_score, reverse=True)[:3]
+    if not selected_pairs and not selected_singles:
+        raise HTTPException(422, "Add a concept or discovery to at least one curiosity before discovering Sidequests.")
+
+    def concept_payload(concept: ItemConcept) -> dict[str, object]:
+        source_urls = [] if concept.origin == "user_kept" else list(db.scalars(select(ResearchSource.url).join(ConceptSource, ConceptSource.source_id == ResearchSource.id).where(ConceptSource.concept_id == concept.id)).all())
+        generic = any(re.search(pattern, concept.name.casefold()) for pattern in (r"\bcoming of age\b", r"\bteam dynamics\b", r"\boppression\b", r"\bmilitary strateg"))
+        invitation = invitation_by_concept.get(concept.id)
+        return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "mechanism": concept.mechanism, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "spoiler_scope": concept.spoiler_scope, "human_kept": concept.origin == "user_kept", "interested": concept.interested, "loved": concept.loved, "surprised": concept.surprised, "saved_exploration": {"question": invitation.question, "user_note": invitation.user_note} if invitation else None, "discovery_mode": concept.discovery_mode, "discovery_quality": json.loads(concept.discovery_quality_json or "{}"), "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
+
+    def item_payload(item: CuriosityItem) -> dict[str, object]:
+        return {**item_ai_payload(item), "id": item.id, "concepts": [concept_payload(concept) for concept in by_item[item.id]]}
+
+    candidate_contexts: list[dict[str, object]] = []
+    allowed_origins: set[frozenset[int]] = set()
     for item_a, item_b in selected_pairs:
-        allowed_pairs.add(frozenset((item_a.id, item_b.id)))
-        def concept_payload(concept: ItemConcept) -> dict[str, object]:
-            source_urls = [] if concept.origin == "user_kept" else list(db.scalars(select(ResearchSource.url).join(ConceptSource, ConceptSource.source_id == ResearchSource.id).where(ConceptSource.concept_id == concept.id)).all())
-            generic = any(re.search(pattern, concept.name.casefold()) for pattern in (r"\bcoming of age\b", r"\bteam dynamics\b", r"\boppression\b", r"\bmilitary strateg"))
-            invitation = invitation_by_concept.get(concept.id)
-            return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "mechanism": concept.mechanism, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "spoiler_scope": concept.spoiler_scope, "human_kept": concept.origin == "user_kept", "interested": concept.interested, "loved": concept.loved, "surprised": concept.surprised, "saved_exploration": {"question": invitation.question, "user_note": invitation.user_note} if invitation else None, "discovery_mode": concept.discovery_mode, "discovery_quality": json.loads(concept.discovery_quality_json or "{}"), "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
-        pair_payloads.append({
-            "item_a": {**item_ai_payload(item_a), "id": item_a.id, "concepts": [concept_payload(c) for c in by_item[item_a.id]]},
-            "item_b": {**item_ai_payload(item_b), "id": item_b.id, "concepts": [concept_payload(c) for c in by_item[item_b.id]]},
-        })
+        allowed_origins.add(frozenset((item_a.id, item_b.id)))
+        candidate_contexts.append({"mode": "connection", "item_a": item_payload(item_a), "item_b": item_payload(item_b)})
+    for item in selected_singles:
+        allowed_origins.add(frozenset((item.id,)))
+        candidate_contexts.append({"mode": "single_item_direction", "item_a": item_payload(item), "item_b": None})
+    max_contexts = max(1, min(int(os.getenv("SIDEQUEST_MAX_CONTEXTS", "8")), 12))
+    candidate_contexts = candidate_contexts[:max_contexts]
+    allowed_origins = {frozenset((context["item_a"]["id"], context["item_b"]["id"])) if context["item_b"] else frozenset((context["item_a"]["id"],)) for context in candidate_contexts}  # type: ignore[index]
+
+    def candidate_origin_ids(candidate) -> list[int]:
+        return list(dict.fromkeys(candidate.origin_item_ids or [candidate.item_a_id, candidate.item_b_id]))
+
     try:
-        generated = ai.generate_candidates(pair_payloads)
-        grounded_candidates = [candidate for candidate in generated.candidates if frozenset((candidate.item_a_id, candidate.item_b_id)) in allowed_pairs]
+        generated = ai.generate_candidates(candidate_contexts)
+        normalized_candidates = [candidate.model_copy(update={
+            "origin_item_ids": candidate_origin_ids(candidate),
+            "invitation": candidate.invitation or candidate.new_question,
+        }) for candidate in generated.candidates]
+        grounded_candidates = [candidate for candidate in normalized_candidates if frozenset(candidate_origin_ids(candidate)) in allowed_origins]
         if not grounded_candidates:
             raise AIProviderError("No grounded connection candidates were returned.")
         rejected_reasons = [reason for candidate in grounded_candidates if (reason := deterministic_rejection_reason(candidate))]
@@ -1879,24 +1918,33 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         final = ai.critique_candidates([candidate.model_dump() for candidate in valid_candidates])
     except (AIConfigurationError, AIProviderError) as exc:
         raise ai_http_error(exc) from exc
-    if not final.accepted or frozenset((final.item_a_id, final.item_b_id)) not in allowed_pairs:
+    final_origin_ids = candidate_origin_ids(final)
+    if not final.accepted or frozenset(final_origin_ids) not in allowed_origins:
         raise HTTPException(422, sidequest_rejection_detail(final.rejection_reason))
     if len(final.bridge.strip()) < 12 or len(final.where_it_breaks.strip()) < 20:
         raise HTTPException(422, sidequest_rejection_detail("The proposed connection was too broad or did not explain its limitations clearly enough."))
-    selected_pair = frozenset((final.item_a_id, final.item_b_id))
+    selected_origin = frozenset(final_origin_ids)
+    dedupe_material = "|".join((",".join(str(item_id) for item_id in sorted(selected_origin)), normalize_concept_term(final.bridge), normalize_concept_term(final.connection)))
+    dedupe_key = hashlib.sha256(dedupe_material.encode()).hexdigest()
     repeated = db.scalars(select(Sidequest)).all()
     if any(
-        frozenset((saved.item_a_id, saved.item_b_id)) == selected_pair
-        and normalize_concept_term(saved.bridge) == normalize_concept_term(final.bridge)
+        saved.dedupe_key == dedupe_key or (
+            frozenset(json.loads(saved.origin_item_ids_json or "[]") or (saved.item_a_id, saved.item_b_id)) == selected_origin
+            and normalize_concept_term(saved.bridge) == normalize_concept_term(final.bridge)
+        )
         for saved in repeated
     ):
-        raise HTTPException(422, sidequest_rejection_detail("That conceptual bridge has already been explored for this pair."))
+        raise HTTPException(422, sidequest_rejection_detail("That direction has already been explored for these curiosities."))
+    item_a_id = final_origin_ids[0]
+    item_b_id = final_origin_ids[1] if len(final_origin_ids) > 1 else item_a_id
     sidequest = Sidequest(
-        item_a_id=final.item_a_id, item_b_id=final.item_b_id, title=final.title.strip(),
+        item_a_id=item_a_id, item_b_id=item_b_id, title=final.title.strip(),
         connection=final.connection.strip(), bridge=final.bridge.strip(), why_interesting=final.why_interesting.strip(),
         where_it_breaks=final.where_it_breaks.strip(), new_question=final.new_question.strip(),
         evidence_status="Exploratory and not externally verified.",
         concepts_json=json.dumps(final.concepts_used), evidence_json=json.dumps(final.evidence),
+        origin_item_ids_json=json.dumps(final_origin_ids), discovery_kind=final.discovery_kind,
+        invitation=(final.invitation or final.new_question).strip(), dedupe_key=dedupe_key,
     )
     db.add(sidequest)
     db.commit()

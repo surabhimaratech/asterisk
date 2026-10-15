@@ -112,6 +112,18 @@ describe('Sidequest preparation', () => {
     expect(screen.getByRole('button', { name: '✦ Discover Sidequests' })).toBeEnabled()
     expect(screen.queryByText(/completed investigation/i)).not.toBeInTheDocument()
   })
+
+  it('renders a single-origin Sidequest without inventing a second curiosity', () => {
+    const created = new Date().toISOString()
+    const item = { id: 1, kind: 'thought' as const, title: 'Maps of hesitation', note: null, url: null, creator: null, release_year: null, work_scope: 'individual' as const, parent_work_title: null, canonical_identity_id: null, progress_status: 'unknown' as const, progress_current: null, progress_total: null, progress_unit: 'installment' as const, spoiler_policy: 'avoid' as const, created_at: created }
+    const sidequest = { id: 4, item_a_id: 1, item_b_id: 1, item_a_title: item.title, item_b_title: item.title, title: 'A map of almost-chosen paths', connection: 'Hesitation can become useful spatial data.', bridge: 'Spatial traces of unrealized decisions', why_interesting: 'It preserves uncertainty.', where_it_breaks: 'Pauses can also be noise or access barriers.', new_question: 'What do abandoned routes reveal?', evidence_status: 'Exploratory and not externally verified.', concepts_used: ['Hesitation as spatial data'], evidence: [], origin_item_ids: [1], origin_titles: [item.title], discovery_kind: 'creative_impulse', invitation: 'Trace where uncertainty changed your route.', created_at: created }
+
+    render(<SidequestsView items={[item]} conceptCounts={{ 1: 1 }} sidequests={[sidequest]} invitations={[]} busy={false} onExplore={() => undefined} onSurprise={() => undefined} />)
+
+    expect(screen.getByText('Trace where uncertainty changed your route.')).toBeInTheDocument()
+    expect(screen.getAllByText(item.title)).toHaveLength(2)
+    expect(screen.queryByText('✦', { selector: '.connected-items b' })).not.toBeInTheDocument()
+  })
 })
 
 describe('identity disambiguation', () => {
