@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ValidatedConcept, WorkUnderstanding, strict_json_schema
-from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, app, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
+from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, ItemConcept, app, concepts_are_semantic_duplicates, deduplicate_concept_candidates, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
 from app.quality import candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from app.research import ResearchPacket, RetrievedSource, get_research_provider
 
@@ -1478,6 +1478,68 @@ def test_personalized_anchor_selection_preserves_an_unfamiliar_direction(monkeyp
 
     assert len(selected) == 3
     assert any(anchor.concise_label == "Quiet companionship" for anchor in selected)
+
+
+def generated_concept(
+    concept_id: int, classification: str, name: str, hook: str, definition: str, mechanism: str,
+) -> ItemConcept:
+    return ItemConcept(
+        id=concept_id, item_id=1, name=name, canonical_name=name, category="mechanism", origin="ai",
+        definition=definition, explanation=definition, mechanism=mechanism, relationship_evidence=definition,
+        concept_classification=classification, curiosity_hook=hook, discovery_quality_json='{"specificity":"high"}',
+        concept_verification="verified" if classification == "established_concept" else "work_supported",
+        relationship_verification="verified", interested=False, loved=False, surprised=False,
+    )
+
+
+def test_cross_category_dedupes_identical_curiosity_invitations_and_prefers_evidence() -> None:
+    hook = "When can humor preserve clear coordination while a crew is facing mortal danger?"
+    observation = generated_concept(1, "grounded_observation", "Humor in Crisis", hook, "Humor helps a stranded crew keep working through danger.", "Humor regulates stress while the crew coordinates repairs.")
+    established = generated_concept(2, "established_concept", "Humor in Crisis", hook, "Humor can regulate stress and preserve group coordination during danger.", "Stress regulation protects communication and coordinated action.")
+
+    visible = deduplicate_concept_candidates(
+        [observation, established], {1: {"humor-anchor"}, 2: {"humor-anchor"}},
+        {1: ["observation"], 2: ["concept", "relationship"]},
+    )
+
+    assert [concept.id for concept in visible] == [2]
+    assert [observation.id, established.id] == [1, 2]  # persisted inputs remain untouched
+
+
+def test_cross_category_dedupes_paraphrased_underlying_idea() -> None:
+    observation = generated_concept(
+        1, "grounded_observation", "Humor under pressure",
+        "How does humor help a stranded crew coordinate clearly during mortal danger?",
+        "Humor regulates stress and preserves coordination when a stranded crew faces lethal failures.",
+        "Playful exchanges regulate stress and preserve coordinated action during lethal failures.",
+    )
+    interpretation = generated_concept(
+        2, "grounded_interpretation", "Jokes as crisis coordination",
+        "When can jokes help a stranded crew coordinate during life-threatening danger?",
+        "Jokes regulate crew stress, preserving coordination through lethal equipment failure.",
+        "Shared jokes regulate stress so the stranded crew can preserve coordination through equipment failure.",
+    )
+
+    assert concepts_are_semantic_duplicates(observation, interpretation, {"humor-anchor"}, {"humor-anchor"})
+    assert len(deduplicate_concept_candidates([observation, interpretation], {1: {"humor-anchor"}, 2: {"humor-anchor"}})) == 1
+
+
+def test_cross_category_keeps_distinct_observations_on_same_broad_topic() -> None:
+    coordination = generated_concept(
+        1, "grounded_observation", "Humor under pressure",
+        "When can humor preserve coordination while a crew is facing mortal danger?",
+        "Humor regulates stress and protects coordination during dangerous repair work.",
+        "Stress regulation keeps communication usable during urgent joint action.",
+    )
+    dissent = generated_concept(
+        2, "grounded_interpretation", "Humor as protected dissent",
+        "When do jokes let subordinates challenge authority without direct confrontation?",
+        "Humor can create social cover for criticism across a hierarchy.",
+        "Ambiguous joking lowers the interpersonal cost of challenging a powerful authority figure.",
+    )
+
+    assert not concepts_are_semantic_duplicates(coordination, dissent, {"humor-anchor"}, {"humor-anchor"})
+    assert len(deduplicate_concept_candidates([coordination, dissent], {1: {"humor-anchor"}, 2: {"humor-anchor"}})) == 2
 
 
 def test_concept_quality_gate_separates_concept_and_relationship_evidence() -> None:

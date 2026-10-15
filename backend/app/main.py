@@ -742,7 +742,7 @@ def rejected_finding_read(lead: ConceptLeadAudit, db: Session) -> RejectedFindin
 def enrichment_read(item_id: int, db: Session) -> EnrichmentRead:
     enrichment = db.get(ItemEnrichment, item_id)
     sources = db.scalars(select(ResearchSource).where(ResearchSource.item_id == item_id, ResearchSource.superseded_at.is_(None)).order_by(ResearchSource.id)).all()
-    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.created_at, ItemConcept.id)).all()
+    concepts = visible_item_concepts(list(db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.created_at, ItemConcept.id)).all()), db)
     rejected = db.scalars(select(ConceptLeadAudit).where(ConceptLeadAudit.item_id == item_id, ConceptLeadAudit.accepted == False).order_by(ConceptLeadAudit.id)).all()  # noqa: E712
     return EnrichmentRead(
         status=enrichment.status if enrichment else "not_researched",
@@ -771,6 +771,147 @@ def enrichment_read(item_id: int, db: Session) -> EnrichmentRead:
 
 def normalize_concept_term(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+IDEA_STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "because", "by", "can", "could", "does", "for", "from",
+    "how", "in", "into", "is", "it", "of", "on", "or", "that", "the", "their", "this", "through", "to",
+    "under", "what", "when", "where", "which", "while", "with", "without", "would",
+}
+
+
+def idea_tokens(*values: str | None) -> set[str]:
+    """Normalize structured finding prose for conservative, local similarity checks."""
+    tokens: set[str] = set()
+    for value in values:
+        for token in normalize_concept_term(value or "").split():
+            if token in IDEA_STOP_WORDS or len(token) < 3:
+                continue
+            # Light inflection folding catches crisis/crises and plural/gerund
+            # variants without pretending to be a general semantic model.
+            if token.endswith("ies") and len(token) > 5:
+                token = f"{token[:-3]}y"
+            elif token.endswith("ing") and len(token) > 6:
+                token = token[:-3]
+            elif token.endswith("es") and len(token) > 5:
+                token = token[:-2]
+            elif token.endswith("s") and len(token) > 4:
+                token = token[:-1]
+            tokens.add(token)
+    return tokens
+
+
+def token_overlap(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / min(len(left), len(right))
+
+
+def concepts_are_semantic_duplicates(
+    left: ItemConcept, right: ItemConcept, left_lineage: set[str] | None = None, right_lineage: set[str] | None = None,
+) -> bool:
+    """Match the same generated idea across classifications, not broad topics."""
+    if left.origin in {ConceptOrigin.user.value, ConceptOrigin.user_kept.value} or right.origin in {ConceptOrigin.user.value, ConceptOrigin.user_kept.value}:
+        return False
+    if not left.concept_classification or not right.concept_classification or left.concept_classification == right.concept_classification:
+        return False
+
+    left_hook = normalize_concept_term(left.curiosity_hook or "")
+    right_hook = normalize_concept_term(right.curiosity_hook or "")
+    if left_hook and left_hook == right_hook:
+        return True
+
+    hook_similarity = token_overlap(idea_tokens(left.curiosity_hook), idea_tokens(right.curiosity_hook))
+    left_substance = idea_tokens(left.name, left.definition, left.mechanism, left.relationship_evidence)
+    right_substance = idea_tokens(right.name, right.definition, right.mechanism, right.relationship_evidence)
+    substance_similarity = token_overlap(left_substance, right_substance)
+    shared_substance = len(left_substance & right_substance)
+    shared_lineage = bool((left_lineage or set()) & (right_lineage or set()))
+
+    # A shared work anchor makes moderate paraphrase overlap meaningful. Without
+    # lineage, require agreement in both the invitation and substantive fields.
+    if shared_lineage and hook_similarity >= 0.45 and substance_similarity >= 0.30 and shared_substance >= 3:
+        return True
+    return hook_similarity >= 0.70 and substance_similarity >= 0.50 and shared_substance >= 4
+
+
+def concept_preference(concept: ItemConcept, source_support: list[str]) -> tuple[int, int, int, int, int]:
+    """Prefer evidence and specificity; use feedback only as a close tie-breaker."""
+    feedback = int(concept.interested) + int(concept.loved) + int(concept.surprised)
+    evidence = (
+        4 * sum("concept" in support for support in source_support)
+        + 2 * sum("relationship" in support for support in source_support)
+        + sum("observation" in support for support in source_support)
+        + {"verified": 4, "partially_verified": 2, "work_supported": 2}.get(concept.concept_verification or "", 0)
+        + {"verified": 3, "supported_interpretation": 2}.get(concept.relationship_verification or "", 0)
+    )
+    quality = json.loads(concept.discovery_quality_json or "{}")
+    specificity = {"high": 2, "medium": 1}.get(quality.get("specificity"), 0)
+    concreteness = min(24, len(idea_tokens(concept.definition, concept.mechanism, concept.relationship_evidence)))
+    classification = {"established_concept": 2, "grounded_interpretation": 1, "grounded_observation": 0}.get(concept.concept_classification or "", 0)
+    return evidence, specificity, concreteness, feedback, classification
+
+
+def deduplicate_concept_candidates(
+    concepts: list[ItemConcept], lineages: dict[int, set[str]] | None = None,
+    source_support: dict[int, list[str]] | None = None,
+) -> list[ItemConcept]:
+    """Return one representative per strongly matching cross-category idea."""
+    lineages = lineages or {}
+    source_support = source_support or {}
+    kept: list[ItemConcept] = []
+    for concept in concepts:
+        duplicate_index = next((
+            index for index, existing in enumerate(kept)
+            if existing.item_id == concept.item_id
+            and concepts_are_semantic_duplicates(
+                existing, concept, lineages.get(existing.id, set()), lineages.get(concept.id, set()),
+            )
+        ), None)
+        if duplicate_index is None:
+            kept.append(concept)
+            continue
+        existing = kept[duplicate_index]
+        if concept_preference(concept, source_support.get(concept.id, [])) > concept_preference(existing, source_support.get(existing.id, [])):
+            kept[duplicate_index] = concept
+    return kept
+
+
+def visible_item_concepts(concepts: list[ItemConcept], db: Session) -> list[ItemConcept]:
+    """Suppress cross-category duplicates without altering persisted provenance."""
+    generated = [concept for concept in concepts if concept.origin == ConceptOrigin.ai.value]
+    audit_by_id = {
+        audit.id: audit for audit in db.scalars(select(ConceptLeadAudit).where(
+            ConceptLeadAudit.item_id.in_({concept.item_id for concept in generated})
+        )).all()
+    } if generated else {}
+    links_by_concept: dict[int, list[str]] = {}
+    if generated:
+        for link in db.scalars(select(ConceptSource).where(ConceptSource.concept_id.in_([concept.id for concept in generated]))).all():
+            links_by_concept.setdefault(link.concept_id, []).append(link.support_kind)
+
+    def lineage(concept: ItemConcept) -> set[str]:
+        audit = audit_by_id.get(concept.review_audit_id) if concept.review_audit_id else None
+        if audit is None:
+            matches = [
+                entry for entry in audit_by_id.values()
+                if entry.item_id == concept.item_id
+                and normalize_concept_term(entry.name) == normalize_concept_term(concept.name)
+                and entry.concept_classification == concept.concept_classification
+            ]
+            audit = max(matches, key=lambda entry: entry.id) if matches else None
+        if audit is None:
+            return set()
+        snapshot = json.loads(audit.candidate_snapshot_json or "{}")
+        problem_ids = snapshot.get("problem_ids")
+        if isinstance(problem_ids, list):
+            return {str(value) for value in problem_ids}
+        problem_id = snapshot.get("problem_id")
+        return {str(problem_id)} if problem_id else set()
+
+    return deduplicate_concept_candidates(
+        concepts, {concept.id: lineage(concept) for concept in generated}, links_by_concept,
+    )
 
 
 WORK_KINDS = {Kind.book.value, Kind.movie.value, Kind.tv_series.value, Kind.podcast.value, Kind.article.value}
@@ -1132,7 +1273,7 @@ def create_item(data: ItemCreate, db: Session = Depends(get_db)):
 def list_concepts(item_id: int, db: Session = Depends(get_db)):
     if db.get(CuriosityItem, item_id) is None:
         raise HTTPException(404, "Item not found")
-    concepts = db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.created_at, ItemConcept.id)).all()
+    concepts = visible_item_concepts(list(db.scalars(select(ItemConcept).where(ItemConcept.item_id == item_id, ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.created_at, ItemConcept.id)).all()), db)
     return [concept_read(concept, db) for concept in concepts]
 
 @app.post("/api/items/{item_id}/concepts", response_model=ConceptRead, status_code=201)
@@ -1686,6 +1827,7 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             result.accepted = False
             result.rejection_reason = quality_reason
     results_by_candidate = {result.candidate_id: result for result in validation.results}
+    candidate_audits: dict[str, ConceptLeadAudit] = {}
     for candidate in candidates.candidates:
         result = results_by_candidate.get(candidate.candidate_id)
         motivating_detail = "\n".join(reference.excerpt for reference in candidate.concept_evidence)
@@ -1697,7 +1839,10 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
         evidence_issue = candidate_evidence_rejection(candidate, concept_source_text, concept_source_urls)
         key = concept_feedback_key(candidate.canonical_name, candidate.concept_classification)
         feedback = feedback_state(item_id, key, candidate.canonical_name, db)
-        db.add(ConceptLeadAudit(item_id=item_id, name=candidate.canonical_name, proposed_definition=candidate.definition, motivating_detail=motivating_detail, proposed_relationship=result.relationship_evidence if result else candidate.research_path, relationship_type=result.relationship_type if result else "unsupported", research_questions_json=json.dumps(candidate.problem_ids), accepted=bool(result and result.accepted), rejection_reason=None if result and result.accepted else final_outcome, stage="concept_candidate", discovery_origin=candidate.discovery_origin, discovery_source_ids_json=json.dumps(candidate.discovery_source_ids), research_path=candidate.research_path, initial_validation_outcome=initial_evidence_outcomes.get(candidate.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(candidate.candidate_id, {})), final_validation_outcome=final_outcome, candidate_snapshot_json=json.dumps(candidate.model_dump()), validation_snapshot_json=json.dumps(result.model_dump()) if result else "{}", source_snapshot_json=json.dumps(source_snapshots), automated_evidence_status="partially_supported" if evidence_issue is None else "unverified", evidence_review_detail=evidence_issue or "Independent concept evidence passed deterministic checks; the final automated outcome is preserved separately.", concept_classification=candidate.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in candidate.concept_evidence) else "quotation", **feedback))
+        audit = ConceptLeadAudit(item_id=item_id, name=candidate.canonical_name, proposed_definition=candidate.definition, motivating_detail=motivating_detail, proposed_relationship=result.relationship_evidence if result else candidate.research_path, relationship_type=result.relationship_type if result else "unsupported", research_questions_json=json.dumps(candidate.problem_ids), accepted=bool(result and result.accepted), rejection_reason=None if result and result.accepted else final_outcome, stage="concept_candidate", discovery_origin=candidate.discovery_origin, discovery_source_ids_json=json.dumps(candidate.discovery_source_ids), research_path=candidate.research_path, initial_validation_outcome=initial_evidence_outcomes.get(candidate.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(candidate.candidate_id, {})), final_validation_outcome=final_outcome, candidate_snapshot_json=json.dumps(candidate.model_dump()), validation_snapshot_json=json.dumps(result.model_dump()) if result else "{}", source_snapshot_json=json.dumps(source_snapshots), automated_evidence_status="partially_supported" if evidence_issue is None else "unverified", evidence_review_detail=evidence_issue or "Independent concept evidence passed deterministic checks; the final automated outcome is preserved separately.", concept_classification=candidate.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in candidate.concept_evidence) else "quotation", **feedback)
+        db.add(audit)
+        db.flush()
+        candidate_audits[candidate.candidate_id] = audit
     if not understanding.ambiguous_identity:
         seen_concepts: set[str] = set()
         for extracted in validation.results:
@@ -1713,7 +1858,7 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
             problem_scope = {problem.problem_id: problem.spoiler_scope for problem in research_anchors}
             scope_order = {"premise_only": 0, "within_progress": 1, "full": 2}
             extracted_scope = max((problem_scope.get(problem_id, "premise_only") for problem_id in next((candidate.problem_ids for candidate in candidates.candidates if candidate.candidate_id == extracted.candidate_id), [])), key=lambda value: scope_order[value], default="premise_only")
-            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id if canonical else None, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.", concept_classification=extracted.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in extracted.concept_evidence) else "quotation", spoiler_scope=extracted_scope, **feedback)
+            concept = ItemConcept(item_id=item_id, canonical_concept_id=canonical.id if canonical else None, name=extracted.canonical_name.strip(), canonical_name=extracted.canonical_name.strip(), category="mechanism" if extracted.level == "mechanism" else "general", origin="ai", explanation=extracted.definition, definition=extracted.definition, domain=extracted.domain, mechanism=extracted.mechanism, level=extracted.level, relationship=extracted.relationship_evidence, relationship_type=extracted.relationship_type, relationship_evidence=extracted.relationship_evidence, evidence_status="supported" if extracted.concept_verification == "verified" else "inferred", concept_verification=extracted.concept_verification, relationship_verification=extracted.relationship_verification, confidence=extracted.confidence, label_kind=extracted.label_kind, curiosity_hook=extracted.curiosity_hook, discovery_origin=extracted.discovery_origin, research_path=extracted.research_path, discovery_source_ids_json=json.dumps(extracted.discovery_source_ids), initial_validation_outcome=initial_evidence_outcomes.get(extracted.candidate_id), recovery_attempt_json=json.dumps(recovery_attempts.get(extracted.candidate_id, {})), final_validation_outcome="Accepted after final validation.", review_audit_id=candidate_audits.get(extracted.candidate_id).id if candidate_audits.get(extracted.candidate_id) else None, concept_classification=extracted.concept_classification, evidence_form="paraphrase" if any(reference.evidence_form == "paraphrase" for reference in extracted.concept_evidence) else "quotation", spoiler_scope=extracted_scope, **feedback)
             db.add(concept)
             db.flush()
             support_by_url: dict[str, set[str]] = {}
@@ -1809,7 +1954,7 @@ def list_sidequests(db: Session = Depends(get_db)):
 @app.post("/api/sidequests/surprise", response_model=SidequestRead, status_code=201)
 def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client)):
     items = db.scalars(select(CuriosityItem).order_by(CuriosityItem.id)).all()
-    concepts = db.scalars(select(ItemConcept).where(ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.item_id, ItemConcept.id)).all()
+    concepts = visible_item_concepts(list(db.scalars(select(ItemConcept).where(ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.item_id, ItemConcept.id)).all()), db)
     by_item: dict[int, list[ItemConcept]] = {}
     for concept in concepts:
         by_item.setdefault(concept.item_id, []).append(concept)
