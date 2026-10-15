@@ -167,6 +167,21 @@ class ItemConcept(Base):
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+
+class ExplorationInvitation(Base):
+    __tablename__ = "exploration_invitations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("curiosity_items.id"), index=True)
+    source_concept_id: Mapped[int | None] = mapped_column(ForeignKey("item_concepts.id"), index=True, nullable=True)
+    source_feedback_key: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    source_concept_name: Mapped[str] = mapped_column(String(160))
+    question: Mapped[str] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    user_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class Sidequest(Base):
     __tablename__ = "sidequests"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -467,6 +482,26 @@ class SidequestRead(BaseModel):
     evidence: list[str]
     created_at: datetime
 
+
+class ExplorationInvitationRead(BaseModel):
+    id: int
+    item_id: int
+    item_title: str
+    source_concept_id: int | None
+    active_concept_id: int | None
+    source_concept_name: str
+    question: str
+    status: Literal["queued", "dismissed"]
+    user_note: str | None
+    available: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExplorationInvitationUpdate(BaseModel):
+    status: Literal["queued", "dismissed"]
+    note: str | None = Field(default=None, max_length=2000)
+
 class ResearchSourceRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -538,6 +573,7 @@ def migrate_additive_columns(target_engine=engine, database_url: str = DATABASE_
     """Small additive migration runner for existing local SQLite databases."""
     if not database_url.startswith("sqlite"):
         return
+    ExplorationInvitation.__table__.create(bind=target_engine, checkfirst=True)
     additions = {
         "curiosity_items": {"creator": "VARCHAR(300)", "release_year": "INTEGER", "work_scope": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "parent_work_title": "VARCHAR(300)", "canonical_identity_id": "VARCHAR(300)", "progress_status": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "progress_current": "INTEGER", "progress_total": "INTEGER", "progress_unit": "VARCHAR(30) NOT NULL DEFAULT 'installment'", "spoiler_policy": "VARCHAR(30) NOT NULL DEFAULT 'avoid'"},
         "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "appeal_dimensions_json": "TEXT NOT NULL DEFAULT '[]'", "pattern_scope": "VARCHAR(40)", "spoiler_scope": "VARCHAR(30) NOT NULL DEFAULT 'premise_only'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME", "superseded_at": "DATETIME"},
@@ -603,6 +639,35 @@ def sidequest_read(sidequest: Sidequest, db: Session) -> SidequestRead:
         concepts_used=json.loads(sidequest.concepts_json or "[]"),
         evidence=json.loads(sidequest.evidence_json or "[]"),
     )
+
+
+def active_invitation_concept(invitation: ExplorationInvitation, db: Session) -> ItemConcept | None:
+    concept = db.get(ItemConcept, invitation.source_concept_id) if invitation.source_concept_id is not None else None
+    if concept is not None and concept.superseded_at is None and concept.item_id == invitation.item_id:
+        return concept
+    if invitation.source_feedback_key:
+        return db.scalar(select(ItemConcept).where(
+            ItemConcept.item_id == invitation.item_id,
+            ItemConcept.feedback_key == invitation.source_feedback_key,
+            ItemConcept.superseded_at.is_(None),
+        ).order_by(ItemConcept.created_at.desc(), ItemConcept.id.desc()))
+    return None
+
+
+def exploration_invitation_read(invitation: ExplorationInvitation, db: Session) -> ExplorationInvitationRead:
+    item = db.get(CuriosityItem, invitation.item_id)
+    active_concept = active_invitation_concept(invitation, db)
+    return ExplorationInvitationRead(
+        id=invitation.id, item_id=invitation.item_id,
+        item_title=item.title if item else "Deleted curiosity",
+        source_concept_id=invitation.source_concept_id,
+        active_concept_id=active_concept.id if active_concept else None,
+        source_concept_name=invitation.source_concept_name,
+        question=invitation.question, status=invitation.status,
+        user_note=invitation.user_note, available=active_concept is not None,
+        created_at=invitation.created_at, updated_at=invitation.updated_at,
+    )
+
 
 def concept_read(concept: ItemConcept, db: Session) -> ConceptRead:
     source_links = list(db.scalars(select(ConceptSource).where(ConceptSource.concept_id == concept.id).order_by(ConceptSource.id)).all())
@@ -1663,6 +1728,67 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
     db.commit()
     return enrichment_read(item_id, db)
 
+@app.get("/api/exploration-invitations", response_model=list[ExplorationInvitationRead])
+def list_exploration_invitations(
+    item_id: int | None = None,
+    status: Literal["queued", "dismissed"] | None = None,
+    db: Session = Depends(get_db),
+):
+    stmt = select(ExplorationInvitation)
+    if item_id is not None:
+        stmt = stmt.where(ExplorationInvitation.item_id == item_id)
+    if status is not None:
+        stmt = stmt.where(ExplorationInvitation.status == status)
+    invitations = db.scalars(stmt.order_by(ExplorationInvitation.updated_at.desc(), ExplorationInvitation.id.desc())).all()
+    return [exploration_invitation_read(invitation, db) for invitation in invitations]
+
+
+@app.post("/api/concepts/{concept_id}/exploration", response_model=ExplorationInvitationRead)
+def save_exploration_invitation(concept_id: int, db: Session = Depends(get_db)):
+    concept = db.get(ItemConcept, concept_id)
+    if concept is None or concept.superseded_at is not None:
+        raise HTTPException(404, "Current discovery not found")
+    if not concept.curiosity_hook or not concept.curiosity_hook.strip():
+        raise HTTPException(422, "This discovery does not have a specific exploration invitation to save.")
+    identity_filter = ExplorationInvitation.source_concept_id == concept.id
+    if concept.feedback_key:
+        identity_filter = or_(identity_filter, ExplorationInvitation.source_feedback_key == concept.feedback_key)
+    invitation = db.scalar(select(ExplorationInvitation).where(
+        ExplorationInvitation.item_id == concept.item_id, identity_filter,
+    ).order_by(ExplorationInvitation.id.desc()))
+    now = datetime.now(timezone.utc)
+    if invitation is None:
+        invitation = ExplorationInvitation(
+            item_id=concept.item_id, source_concept_id=concept.id,
+            source_feedback_key=concept.feedback_key, source_concept_name=concept.name,
+            question=concept.curiosity_hook.strip(), status="queued", updated_at=now,
+        )
+    else:
+        invitation.source_concept_id = concept.id
+        invitation.source_feedback_key = concept.feedback_key
+        invitation.source_concept_name = concept.name
+        invitation.question = concept.curiosity_hook.strip()
+        invitation.status = "queued"
+        invitation.updated_at = now
+    db.add(invitation)
+    db.commit()
+    db.refresh(invitation)
+    return exploration_invitation_read(invitation, db)
+
+
+@app.patch("/api/exploration-invitations/{invitation_id}", response_model=ExplorationInvitationRead)
+def update_exploration_invitation(invitation_id: int, data: ExplorationInvitationUpdate, db: Session = Depends(get_db)):
+    invitation = db.get(ExplorationInvitation, invitation_id)
+    if invitation is None:
+        raise HTTPException(404, "Exploration invitation not found")
+    invitation.status = data.status
+    invitation.user_note = data.note
+    invitation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(invitation)
+    return exploration_invitation_read(invitation, db)
+
+
 @app.get("/api/sidequests", response_model=list[SidequestRead])
 def list_sidequests(db: Session = Depends(get_db)):
     saved = db.scalars(select(Sidequest).order_by(Sidequest.created_at.desc(), Sidequest.id.desc())).all()
@@ -1675,6 +1801,12 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
     by_item: dict[int, list[ItemConcept]] = {}
     for concept in concepts:
         by_item.setdefault(concept.item_id, []).append(concept)
+    queued_invitations = db.scalars(select(ExplorationInvitation).where(ExplorationInvitation.status == "queued")).all()
+    invitation_by_concept: dict[int, ExplorationInvitation] = {}
+    for invitation in queued_invitations:
+        active_concept = active_invitation_concept(invitation, db)
+        if active_concept is not None:
+            invitation_by_concept[active_concept.id] = invitation
     researched_ids = set(db.scalars(select(ItemEnrichment.item_id).where(ItemEnrichment.status == "researched")).all())
     eligible = [item for item in items if by_item.get(item.id) and (not researched_ids or item.id in researched_ids)]
     previous_terms = set()
@@ -1692,6 +1824,7 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
             "interest": sum(1 for concept in combined if concept.interested),
             "love": sum(1 for concept in combined if concept.loved),
             "surprise": min(1, sum(1 for concept in combined if concept.surprised)),
+            "curiosity_potential": min(2, sum(1 for concept in combined if concept.id in invitation_by_concept)),
             "mechanisms": sum(1 for concept in combined if concept.level == "mechanism" or concept.category == "mechanism"),
             "grounded_discoveries": sum(1 for concept in combined if concept.concept_classification in {"established_concept", "grounded_interpretation", "grounded_observation"}),
             "media_diversity": 1 if item_a.kind != item_b.kind else 0,
@@ -1705,6 +1838,7 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         # weights; mechanism, grounding, diversity, and repetition remain visible.
         score = (
             factors["interest"] * 4 + factors["love"] * 6 + factors["surprise"] * 2
+            + factors["curiosity_potential"] * 3
             + factors["mechanisms"] * 2 + factors["grounded_discoveries"]
             + factors["media_diversity"] * 2 - factors["overlap_penalty"] * 2
             - factors["repetition_penalty"] * 2
@@ -1726,7 +1860,8 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         def concept_payload(concept: ItemConcept) -> dict[str, object]:
             source_urls = [] if concept.origin == "user_kept" else list(db.scalars(select(ResearchSource.url).join(ConceptSource, ConceptSource.source_id == ResearchSource.id).where(ConceptSource.concept_id == concept.id)).all())
             generic = any(re.search(pattern, concept.name.casefold()) for pattern in (r"\bcoming of age\b", r"\bteam dynamics\b", r"\boppression\b", r"\bmilitary strateg"))
-            return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "mechanism": concept.mechanism, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "spoiler_scope": concept.spoiler_scope, "human_kept": concept.origin == "user_kept", "interested": concept.interested, "loved": concept.loved, "surprised": concept.surprised, "discovery_mode": concept.discovery_mode, "discovery_quality": json.loads(concept.discovery_quality_json or "{}"), "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
+            invitation = invitation_by_concept.get(concept.id)
+            return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "mechanism": concept.mechanism, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "spoiler_scope": concept.spoiler_scope, "human_kept": concept.origin == "user_kept", "interested": concept.interested, "loved": concept.loved, "surprised": concept.surprised, "saved_exploration": {"question": invitation.question, "user_note": invitation.user_note} if invitation else None, "discovery_mode": concept.discovery_mode, "discovery_quality": json.loads(concept.discovery_quality_json or "{}"), "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
         pair_payloads.append({
             "item_a": {**item_ai_payload(item_a), "id": item_a.id, "concepts": [concept_payload(c) for c in by_item[item_a.id]]},
             "item_b": {**item_ai_payload(item_b), "id": item_b.id, "concepts": [concept_payload(c) for c in by_item[item_b.id]]},
@@ -1816,6 +1951,7 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
     item = db.get(CuriosityItem, item_id)
     if item is None:
         raise HTTPException(404, "Item not found")
+    db.execute(delete(ExplorationInvitation).where(ExplorationInvitation.item_id == item_id))
     db.execute(delete(ItemConcept).where(ItemConcept.item_id == item_id))
     db.execute(delete(Sidequest).where(or_(Sidequest.item_a_id == item_id, Sidequest.item_b_id == item_id)))
     db.delete(item)

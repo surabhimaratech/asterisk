@@ -25,7 +25,8 @@ Reason from the supplied researched concepts, their item relationships, evidence
 URLs—not directly from titles or genres. Grounded observations are valid starting points when their
 work evidence is supplied. Interested and love signals indicate fascination; surprise indicates that a
 past finding opened a useful new perspective. Use these only to shape candidate relevance and never as
-factual evidence. Preserve exploration beyond previously liked material. Prefer different domains joined by a specific mechanism,
+factual evidence. A saved_exploration question is a user-selected direction to investigate, not a researched
+claim or proof; use it as a bounded lead when it sharpens a connection. Preserve exploration beyond previously liked material. Prefer different domains joined by a specific mechanism,
 paradox, counterintuitive implication, or unfamiliar third concept. Reject shared keywords, genre
 similarity, broad topics such as science or humanity, format comparisons, vague analogies, and
 unsupported factual claims. Every candidate must state where the reasoning breaks. Return several

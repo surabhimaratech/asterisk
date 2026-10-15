@@ -17,6 +17,7 @@ type RejectedFinding = { id: number; item_id: number; item_title: string; item_k
 type IdentityCandidate = { candidate_id: string; title: string; creator: string; release_year: number | null; media_type: Kind; work_scope: WorkScope; parent_work_title: string; canonical_identity_id: string; description: string; confidence: number; source_ids: string[] }
 type Enrichment = { status: 'not_researched' | 'researched' | 'needs_confirmation'; resolved_title: string | null; creator: string | null; release_info: string | null; identity_summary: string | null; confirmation_question: string | null; identity_status: 'unresolved' | 'ambiguous' | 'confirmed' | 'not_applicable'; identity_key: string | null; resolved_media_type: Kind | null; resolved_work_scope: WorkScope | null; parent_work_title: string | null; canonical_identity_id: string | null; identity_confidence: number | null; identity_candidates: IdentityCandidate[]; identity_sources: FindingSource[]; confirmed_at: string | null; researched_at: string | null; sources: ResearchSource[]; concepts: ItemConcept[]; rejected_leads: RejectedFinding[] }
 type Sidequest = { id: number; item_a_id: number; item_b_id: number; item_a_title: string; item_b_title: string; title: string; connection: string; bridge: string; why_interesting: string; where_it_breaks: string; new_question: string; evidence_status: string; concepts_used: string[]; evidence: string[]; created_at: string }
+type ExplorationInvitation = { id: number; item_id: number; item_title: string; source_concept_id: number | null; active_concept_id: number | null; source_concept_name: string; question: string; status: 'queued' | 'dismissed'; user_note: string | null; available: boolean; created_at: string; updated_at: string }
 
 const kinds: Kind[] = ['book', 'movie', 'tv_series', 'podcast', 'article', 'concept', 'question', 'thought']
 const workKinds = new Set<Kind>(['book', 'movie', 'tv_series', 'podcast', 'article'])
@@ -56,6 +57,7 @@ export function App() {
   const [conceptItem, setConceptItem] = useState<Item | null>(null)
   const [conceptCounts, setConceptCounts] = useState<Record<number, number>>({})
   const [sidequests, setSidequests] = useState<Sidequest[]>([])
+  const [explorationInvitations, setExplorationInvitations] = useState<ExplorationInvitation[]>([])
   const [sidequestBusy, setSidequestBusy] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -87,6 +89,15 @@ export function App() {
   }
 
   useEffect(() => { void refreshSidequests() }, [])
+
+  async function refreshExplorationInvitations() {
+    try {
+      const response = await fetch('/api/exploration-invitations')
+      if (response.ok) setExplorationInvitations(await response.json())
+    } catch { /* Saved invitations are optional context; the library stays usable. */ }
+  }
+
+  useEffect(() => { void refreshExplorationInvitations() }, [])
 
   useEffect(() => {
     if (items.length === 0) { setConceptCounts({}); return }
@@ -328,9 +339,9 @@ export function App() {
     </section>
 
     {selectedItem && <div className="concept-callout"><span>✦ Look beneath the surface</span><button type="button" onClick={() => exploreConcepts(selectedItem)}>Explore Concepts</button></div>}
-    {conceptItem && <ConceptExplorer item={conceptItem} onClose={() => setConceptItem(null)} onError={setError} onChange={count => setConceptCounts(current => ({ ...current, [conceptItem.id]: count }))} />}
+    {conceptItem && <ConceptExplorer item={conceptItem} onClose={() => setConceptItem(null)} onError={setError} onChange={count => setConceptCounts(current => ({ ...current, [conceptItem.id]: count }))} onInvitationsChange={refreshExplorationInvitations} />}
 
-    <SidequestsView items={items} conceptCounts={conceptCounts} sidequests={sidequests} busy={sidequestBusy} onExplore={exploreConcepts} onSurprise={() => void surpriseMe()} />
+    <SidequestsView items={items} conceptCounts={conceptCounts} sidequests={sidequests} invitations={explorationInvitations} busy={sidequestBusy} onExplore={exploreConcepts} onSurprise={() => void surpriseMe()} />
     {error && <div className="error" role="alert">{error}</div>}
     {success && <div className="success" role="status">{success}</div>}
     <footer>Asterisk · v0.2 · Your curiosity belongs to you.</footer>
@@ -505,7 +516,7 @@ function ThoughtDetail({ item, onClose, onEdit, onRemove }: { item: Item; onClos
   </article>
 }
 
-export function ConceptExplorer({ item, onClose, onError, onChange }: { item: Item; onClose: () => void; onError: (message: string) => void; onChange: (count: number) => void }) {
+export function ConceptExplorer({ item, onClose, onError, onChange, onInvitationsChange }: { item: Item; onClose: () => void; onError: (message: string) => void; onChange: (count: number) => void; onInvitationsChange?: () => Promise<void> }) {
   const [concepts, setConcepts] = useState<ItemConcept[]>([])
   const [loading, setLoading] = useState(true)
   const [extracting, setExtracting] = useState(false)
@@ -513,6 +524,12 @@ export function ConceptExplorer({ item, onClose, onError, onChange }: { item: It
   const [category, setCategory] = useState<ItemConcept['category']>('personal')
   const [enrichment, setEnrichment] = useState<Enrichment | null>(null)
   const [enriching, setEnriching] = useState(false)
+  const [invitations, setInvitations] = useState<ExplorationInvitation[]>([])
+
+  async function loadInvitations() {
+    const response = await fetch(`/api/exploration-invitations?item_id=${item.id}`)
+    if (response.ok) setInvitations(await response.json())
+  }
 
   async function load() {
     setLoading(true)
@@ -524,6 +541,7 @@ export function ConceptExplorer({ item, onClose, onError, onChange }: { item: It
       onChange(loaded.length)
       const enrichmentResponse = await fetch(`/api/items/${item.id}/enrichment`)
       if (enrichmentResponse.ok) setEnrichment(await enrichmentResponse.json())
+      await loadInvitations()
     } catch (caught) { onError(caught instanceof Error ? caught.message : 'Could not load concepts') }
     finally { setLoading(false) }
   }
@@ -629,6 +647,16 @@ export function ConceptExplorer({ item, onClose, onError, onChange }: { item: It
     setConcepts(current => current.map(entry => entry.id === updated.id ? updated : entry))
   }
 
+  async function setExploration(concept: ItemConcept, invitation: ExplorationInvitation | undefined) {
+    const response = invitation?.status === 'queued'
+      ? await fetch(`/api/exploration-invitations/${invitation.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'dismissed', note: invitation.user_note }) })
+      : await fetch(`/api/concepts/${concept.id}/exploration`, { method: 'POST' })
+    if (!response.ok) { onError(await responseError(response, 'Could not update this exploration invitation')); return }
+    const updated: ExplorationInvitation = await response.json()
+    setInvitations(current => [updated, ...current.filter(entry => entry.id !== updated.id)])
+    await onInvitationsChange?.()
+  }
+
   async function setFindingFeedback(finding: RejectedFinding, signal: 'love' | 'surprise') {
     const active = signal === 'love' ? !finding.loved : !finding.surprised
     const response = await fetch(`/api/rejected-findings/${finding.id}/feedback`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ signal, active, note: null }) })
@@ -642,17 +670,19 @@ export function ConceptExplorer({ item, onClose, onError, onChange }: { item: It
     <div className="concept-actions"><button className="primary" type="button" disabled={enriching} onClick={() => void enrich()}>{enriching ? 'Researching the trail…' : enrichment?.status === 'researched' ? '↻ Refresh Research' : '✦ Enrich with Research'}</button><button className="secondary" type="button" disabled={extracting} onClick={() => void extract()}>{extracting ? 'Extracting…' : 'Quick extract without research'}</button></div>
     {enrichment && (enrichment.status !== 'not_researched' || enrichment.identity_status === 'confirmed') && <section className={`research-card ${enrichment.status}`}><div className="research-status"><span>{enrichment.identity_status === 'confirmed' ? 'CONFIRMED IDENTITY' : enrichment.status === 'needs_confirmation' ? 'CHOOSE THE RIGHT WORK' : 'RESEARCHED'}</span>{enrichment.researched_at && <time>{new Date(enrichment.researched_at).toLocaleString()}</time>}</div>{enrichment.identity_status === 'ambiguous' || enrichment.identity_status === 'unresolved' ? <>{enrichment.identity_candidates.length > 0 ? <><p className="confirmation-question">{enrichment.confirmation_question}</p><div className="identity-candidates">{enrichment.identity_candidates.map(candidate => <article key={candidate.candidate_id}><strong>{candidate.title}</strong><span>{[candidate.creator, candidate.release_year, labels[candidate.media_type], candidate.work_scope !== 'unknown' ? candidate.work_scope : null].filter(Boolean).join(' · ')}</span>{candidate.parent_work_title && <small>Related to {candidate.parent_work_title}</small>}<p>{candidate.description}</p><button type="button" disabled={enriching} onClick={() => void confirmIdentity(candidate.candidate_id)}>This is the one</button></article>)}</div></> : <div className="identity-actions"><p>Earlier AI findings are preserved in history but hidden until this work is identified correctly.</p><button type="button" className="primary" disabled={enriching} onClick={() => void enrich()}>Resolve exact work</button></div>}</> : <><h3>{enrichment.resolved_title}</h3><p>{[enrichment.creator, enrichment.release_info, enrichment.resolved_media_type ? labels[enrichment.resolved_media_type] : null, enrichment.resolved_work_scope && enrichment.resolved_work_scope !== 'unknown' ? enrichment.resolved_work_scope : null].filter(Boolean).join(' · ')}</p>{enrichment.parent_work_title && <p>Related work: {enrichment.parent_work_title}</p>}<p>{enrichment.identity_summary}</p>{enrichment.identity_status === 'confirmed' && <div className="identity-actions"><button type="button" onClick={() => void resetIdentity()}>Correct this match</button>{enrichment.status !== 'researched' && <button type="button" className="primary" disabled={enriching} onClick={() => void enrich()}>Research this work</button>}</div>}</>}<details><summary>{enrichment.sources.length} current research {enrichment.sources.length === 1 ? 'source' : 'sources'}</summary><div className="research-sources">{enrichment.sources.map(source => <article key={source.id}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a><small>{source.publisher} · {source.retrieval_status}{source.evidence_roles.length ? ` · ${source.evidence_roles.join(' + ').replaceAll('_', ' ')}` : ''}</small><p>{source.excerpt}</p></article>)}</div></details></section>}
     {enrichment && enrichment.rejected_leads.length > 0 && <details className="rejected-leads"><summary>{enrichment.rejected_leads.length} research {enrichment.rejected_leads.length === 1 ? 'finding' : 'findings'} to review</summary>{enrichment.rejected_leads.map(lead => <RejectedFindingCard key={lead.id} finding={lead} onReview={reviewFinding} onReevaluate={reevaluateFinding} onInterest={setFindingInterest} onFeedback={setFindingFeedback} />)}</details>}
-    {loading ? <p className="muted">Opening the discovery drawer…</p> : concepts.length === 0 ? <div className="concept-empty">No discoveries yet. Ask Asterisk to explore, or add an idea in your own words.</div> : <div className="concept-list">{concepts.map(concept => <DiscoveryCard key={concept.id} concept={concept} enrichment={enrichment} onRemove={remove} onInterest={setConceptInterest} onFeedback={setConceptFeedback} />)}</div>}
+    {loading ? <p className="muted">Opening the discovery drawer…</p> : concepts.length === 0 ? <div className="concept-empty">No discoveries yet. Ask Asterisk to explore, or add an idea in your own words.</div> : <div className="concept-list">{concepts.map(concept => <DiscoveryCard key={concept.id} concept={concept} enrichment={enrichment} invitation={invitations.find(entry => entry.active_concept_id === concept.id)} onRemove={remove} onInterest={setConceptInterest} onFeedback={setConceptFeedback} onExploration={setExploration} />)}</div>}
     <form className="manual-concept" onSubmit={add}><label htmlFor="manual-concept-name">Add a concept for Sidequests</label><div><input id="manual-concept-name" maxLength={120} placeholder="A theme, principle, or underlying mechanism" value={name} onChange={event => setName(event.target.value)} /><select aria-label="Concept category" value={category} onChange={event => setCategory(event.target.value as ItemConcept['category'])}><option value="personal">Personal</option><option value="general">General theme</option><option value="mechanism">Mechanism</option></select><button disabled={!name.trim()}>Add concept</button></div></form>
   </section>
 }
 
-export function DiscoveryCard({ concept, enrichment, onRemove, onInterest, onFeedback }: {
+export function DiscoveryCard({ concept, enrichment, invitation, onRemove, onInterest, onFeedback, onExploration }: {
   concept: ItemConcept
   enrichment: Enrichment | null
+  invitation?: ExplorationInvitation
   onRemove: (concept: ItemConcept) => Promise<void>
   onInterest: (concept: ItemConcept, note?: string | null, forceActive?: boolean) => Promise<void>
   onFeedback: (concept: ItemConcept, signal: 'love' | 'surprise', note?: string | null, forceActive?: boolean) => Promise<void>
+  onExploration?: (concept: ItemConcept, invitation: ExplorationInvitation | undefined) => Promise<void>
 }) {
   const [context, setContext] = useState(concept.interest_note || concept.love_note || concept.surprise_note || '')
   const personal = concept.origin === 'user'
@@ -678,6 +708,7 @@ export function DiscoveryCard({ concept, enrichment, onRemove, onInterest, onFee
       <button type="button" className={concept.loved ? 'loved' : ''} aria-label={`${concept.loved ? 'Remove Love from' : 'Love'} ${concept.name}`} aria-pressed={concept.loved} onClick={() => void onFeedback(concept, 'love')}>{concept.loved ? '♥ Loved' : '♡ Love'}</button>
       <button type="button" className={concept.surprised ? 'surprised' : ''} aria-label={`${concept.surprised ? 'Remove Surprise from' : 'Mark surprising'} ${concept.name}`} aria-pressed={concept.surprised} onClick={() => void onFeedback(concept, 'surprise')}>{concept.surprised ? '✦ Surprised' : '◇ Surprise'}</button>
       <button type="button" className={concept.interested ? 'interested' : ''} aria-label={`${concept.interested ? 'Remove Interest from' : 'Mark interested in'} ${concept.name}`} aria-pressed={concept.interested} onClick={() => void onInterest(concept)}>{concept.interested ? '★ Interested' : '☆ Interested'}</button>
+      {concept.curiosity_hook && onExploration && <button type="button" className={invitation?.status === 'queued' ? 'exploring' : ''} aria-label={`${invitation?.status === 'queued' ? 'Remove from Sidequest seeds' : 'Save for a Sidequest'}: ${concept.curiosity_hook}`} aria-pressed={invitation?.status === 'queued'} onClick={() => void onExploration(concept, invitation)}>{invitation?.status === 'queued' ? '↗ Saved for Sidequests' : '↗ Explore later'}</button>}
       <button type="button" className="remove-discovery" aria-label={`Remove ${concept.name}`} onClick={() => void onRemove(concept)}>×</button>
     </div>
     {!personal && <details className="reaction-context"><summary>Add context to your reaction</summary><textarea rows={2} maxLength={2000} placeholder="Optional — what caught you, or what did you already know?" value={context} onChange={event => setContext(event.target.value)} /><div><button type="button" onClick={() => void onFeedback(concept, 'love', context || null, true)}>Save with Love</button><button type="button" onClick={() => void onFeedback(concept, 'surprise', context || null, true)}>Save with Surprise</button><button type="button" onClick={() => void onInterest(concept, context || null, true)}>Save with Interested</button></div></details>}
@@ -719,12 +750,14 @@ export function RejectedFindingCard({ finding, onReview, onReevaluate, onInteres
   </article>
 }
 
-function SidequestsView({ items, conceptCounts, sidequests, busy, onExplore, onSurprise }: { items: Item[]; conceptCounts: Record<number, number>; sidequests: Sidequest[]; busy: boolean; onExplore: (item: Item) => void; onSurprise: () => void }) {
+export function SidequestsView({ items, conceptCounts, sidequests, invitations, busy, onExplore, onSurprise }: { items: Item[]; conceptCounts: Record<number, number>; sidequests: Sidequest[]; invitations: ExplorationInvitation[]; busy: boolean; onExplore: (item: Item) => void; onSurprise: () => void }) {
   const prepared = items.filter(item => (conceptCounts[item.id] || 0) > 0)
+  const queued = invitations.filter(invitation => invitation.status === 'queued')
   const ready = prepared.length >= 2
-  return <section className="sidequests" id="sidequests"><div className="sidequest-head"><div><span>03 / DISCOVER</span><h2>Sidequests</h2><p>Unexpected bridges between things that made you curious.</p></div><button className="surprise-button" type="button" disabled={busy || !ready} onClick={onSurprise}>{busy ? '✦ Following a thread…' : ready ? '✦ Surprise Me' : 'Prepare two curiosities'}</button></div>
+  return <section className="sidequests" id="sidequests"><div className="sidequest-head"><div><span>03 / DISCOVER</span><h2>Sidequests</h2><p>Unexpected bridges between things that made you curious.</p></div><button className="surprise-button" type="button" disabled={busy || !ready} onClick={onSurprise}>{busy ? '✦ Following a thread…' : ready ? '✦ Discover Sidequests' : 'Prepare two curiosities'}</button></div>
     <div className="sidequest-setup">
       <div className="sidequest-explainer"><span>HOW IT WORKS</span><strong>Add concepts to any two curiosities.</strong><p>A concept is simply a theme or idea inside an item—not the “Concept” item type. The curiosities may be the same type; Sidequests uses their concepts as stepping stones and rejects connections that are too obvious.</p></div>
+      {queued.length > 0 && <div className="exploration-queue"><div><strong>Questions you want to follow</strong><span>{queued.length} saved {queued.length === 1 ? 'invitation' : 'invitations'}</span></div>{queued.map(invitation => <article className={invitation.available ? '' : 'unavailable'} key={invitation.id}><small>{invitation.item_title} · {invitation.source_concept_name}</small><p>{invitation.question}</p>{!invitation.available && <span>Source discovery is no longer current; preserved for your records.</span>}</article>)}</div>}
       <div className="sidequest-steps" aria-label="Sidequest readiness"><span className={items.length ? 'done' : ''}><b>1</b> Save curiosities</span><span className={ready ? 'done' : ''}><b>2</b> Prepare any two items</span><span className={ready ? 'done' : ''}><b>3</b> Ask to be surprised</span></div>
       {items.length === 0 ? <p className="sidequest-guidance">Save your first curiosity above to begin.</p> : <div className="sidequest-sources"><div className="sidequest-source-head"><strong>Choose curiosities to connect</strong><span>{prepared.length} of {items.length} prepared</span></div><div className="sidequest-source-list">{items.map(item => <article className={(conceptCounts[item.id] || 0) > 0 ? 'prepared' : ''} key={item.id}><span className="source-icon">{icons[item.kind]}</span><div><strong>{item.title}</strong><small>{labels[item.kind]} · {(conceptCounts[item.id] || 0) === 0 ? 'No concepts yet' : `${conceptCounts[item.id]} ${(conceptCounts[item.id] || 0) === 1 ? 'concept' : 'concepts'}`}</small></div><button type="button" onClick={() => onExplore(item)}>{(conceptCounts[item.id] || 0) > 0 ? 'View concepts' : 'Add concepts'}</button></article>)}</div></div>}
       {!ready && prepared.length > 0 && <p className="sidequest-guidance">Nice start. Add concepts to one more curiosity—of any type—to unlock Sidequests.</p>}

@@ -869,6 +869,45 @@ def test_mixed_anchor_batch_keeps_valid_and_reports_discard_categories(client: T
     assert "Communication across senses" in received_profiles[0]["authored_lenses"]
 
 
+def test_exploration_invitation_is_idempotent_reversible_and_survives_exact_rerun(client: TestClient) -> None:
+    item_id = create_item(client, title="The Hunger Games").json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: WorkFirstDiscoveryAI()
+    app.dependency_overrides[get_research_provider] = lambda: WorkOnlyResearch()
+    first = client.post(f"/api/items/{item_id}/enrich").json()
+    concept = next(entry for entry in first["concepts"] if entry["name"] == "Spectacle as political control")
+
+    saved = client.post(f"/api/concepts/{concept['id']}/exploration")
+    repeated = client.post(f"/api/concepts/{concept['id']}/exploration")
+    assert saved.status_code == 200
+    assert repeated.json()["id"] == saved.json()["id"]
+    assert saved.json()["question"] == concept["curiosity_hook"]
+    assert saved.json()["status"] == "queued"
+
+    dismissed = client.patch(f"/api/exploration-invitations/{saved.json()['id']}", json={"status": "dismissed", "note": "Not right now."})
+    assert dismissed.status_code == 200
+    assert dismissed.json()["status"] == "dismissed"
+    assert dismissed.json()["user_note"] == "Not right now."
+    assert client.post(f"/api/concepts/{concept['id']}/exploration").json()["status"] == "queued"
+
+    rerun = client.post(f"/api/items/{item_id}/enrich").json()
+    current = next(entry for entry in rerun["concepts"] if entry["name"] == concept["name"])
+    persisted = client.get("/api/exploration-invitations", params={"item_id": item_id, "status": "queued"}).json()
+    assert len(persisted) == 1
+    assert persisted[0]["source_concept_id"] == concept["id"]
+    assert persisted[0]["active_concept_id"] == current["id"]
+    assert persisted[0]["available"] is True
+
+
+def test_manual_concept_without_question_cannot_be_saved_as_exploration(client: TestClient) -> None:
+    item_id = create_item(client).json()["id"]
+    concept = client.post(f"/api/items/{item_id}/concepts", json={"name": "My lens", "category": "personal"}).json()
+
+    response = client.post(f"/api/concepts/{concept['id']}/exploration")
+
+    assert response.status_code == 422
+    assert "specific exploration invitation" in response.json()["detail"]
+
+
 def test_saved_research_sources_expose_evidence_roles(client: TestClient) -> None:
     item_id = create_item(client).json()["id"]
     app.dependency_overrides[get_ai_client] = lambda: FakeAI()
@@ -1172,10 +1211,12 @@ def test_additive_migration_preserves_ids_and_only_recategorizes_known_tv_titles
         preserved = connection.exec_driver_sql("SELECT (SELECT count(*) FROM item_concepts WHERE id = 10 AND superseded_at IS NOT NULL), (SELECT count(*) FROM research_sources WHERE id = 20 AND superseded_at IS NOT NULL), (SELECT count(*) FROM concept_lead_audits WHERE id = 30 AND superseded_at IS NOT NULL), (SELECT status FROM item_enrichments WHERE item_id = 1), (SELECT loved FROM item_concepts WHERE id = 10), (SELECT surprised FROM item_concepts WHERE id = 10)").fetchone()
         p0_defaults = connection.exec_driver_sql("SELECT work_scope, progress_status, progress_unit, spoiler_policy FROM curiosity_items WHERE id = 2").fetchone()
         p0_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(curiosity_items)").fetchall()}
+        invitation_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(exploration_invitations)").fetchall()}
     assert rows == [(1, "tv_series", "Castle"), (2, "movie", "An Ambiguous Title"), (3, "tv_series", "Game of Thrones")]
     assert preserved == (1, 1, 1, "needs_confirmation", 0, 0)
     assert p0_defaults == ("unknown", "unknown", "installment", "avoid")
     assert {"work_scope", "parent_work_title", "canonical_identity_id", "progress_status", "progress_current", "progress_total", "progress_unit", "spoiler_policy"} <= p0_columns
+    assert {"item_id", "source_concept_id", "source_feedback_key", "question", "status", "user_note"} <= invitation_columns
 
     with migration_engine.begin() as connection:
         connection.exec_driver_sql("INSERT INTO curiosity_items (id, kind, title) VALUES (4, 'movie', 'Castle')")
@@ -1304,6 +1345,33 @@ def test_love_and_surprise_shape_sidequests_without_overriding_verification_or_e
     assert item_ids[0] in ai.pairs[0]
     assert any(set(pair) == {item_ids[2], item_ids[3]} for pair in ai.pairs)
     assert client.get(f"/api/items/{item_ids[0]}/concepts").json()[0]["concept_verification"] is None
+    assert created.json()["evidence_status"] == "Exploratory and not externally verified."
+
+
+def test_saved_invitation_is_bounded_sidequest_context_not_evidence(client: TestClient) -> None:
+    class CapturingAI(WorkFirstDiscoveryAI):
+        pairs: list[dict[str, object]] = []
+
+        def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
+            self.pairs = pairs
+            return super().generate_candidates(pairs)
+
+    ai = CapturingAI()
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    app.dependency_overrides[get_research_provider] = lambda: WorkOnlyResearch()
+    item_ids = [create_item(client, title=title, kind="tv_series" if title == "Castle" else "book").json()["id"] for title in ("Castle", "The Hunger Games", "A Psalm for the Wild-Built")]
+    researched = [client.post(f"/api/items/{item_id}/enrich").json() for item_id in item_ids]
+    seed = next(concept for concept in researched[0]["concepts"] if concept["curiosity_hook"])
+    assert client.post(f"/api/concepts/{seed['id']}/exploration").status_code == 200
+
+    created = client.post("/api/sidequests/surprise")
+
+    assert created.status_code == 201
+    assert item_ids[0] in {ai.pairs[0]["item_a"]["id"], ai.pairs[0]["item_b"]["id"]}  # type: ignore[index]
+    concepts = [*ai.pairs[0]["item_a"]["concepts"], *ai.pairs[0]["item_b"]["concepts"]]  # type: ignore[index]
+    saved_context = next(concept["saved_exploration"] for concept in concepts if concept["name"] == seed["name"])
+    assert saved_context["question"] == seed["curiosity_hook"]
+    assert created.json()["evidence"] == []
     assert created.json()["evidence_status"] == "Exploratory and not externally verified."
 
 

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { App, ConceptExplorer, DiscoveryCard, RejectedFindingCard } from './main'
+import { App, ConceptExplorer, DiscoveryCard, RejectedFindingCard, SidequestsView } from './main'
 
 afterEach(() => {
   cleanup()
@@ -75,12 +75,15 @@ describe('discovery card hierarchy', () => {
     }
     const onFeedback = vi.fn(async () => undefined)
     const onInterest = vi.fn(async () => undefined)
-    render(<DiscoveryCard concept={concept as never} enrichment={null} onRemove={async () => undefined} onInterest={onInterest} onFeedback={onFeedback} />)
+    const onExploration = vi.fn(async () => undefined)
+    render(<DiscoveryCard concept={concept as never} enrichment={null} onRemove={async () => undefined} onInterest={onInterest} onFeedback={onFeedback} onExploration={onExploration} />)
 
     expect(screen.getByText('Where could this lead?')).toBeInTheDocument()
     expect(screen.getByText(concept.curiosity_hook)).toBeInTheDocument()
     expect(screen.getByText('Research & provenance').closest('details')).not.toHaveAttribute('open')
     expect(screen.getByRole('button', { name: `Love ${concept.name}` })).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(screen.getByRole('button', { name: `Save for a Sidequest: ${concept.curiosity_hook}` }))
+    await waitFor(() => expect(onExploration).toHaveBeenCalledWith(concept, undefined))
     fireEvent.click(screen.getByText('Add context to your reaction'))
     fireEvent.change(screen.getByPlaceholderText(/what caught you/i), { target: { value: 'I already knew this, but I still love it.' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save with Love' }))
@@ -93,6 +96,21 @@ describe('discovery card hierarchy', () => {
     expect(screen.getByRole('heading', { name: 'Mystical cafés' })).toBeInTheDocument()
     expect(screen.queryByText('Research & provenance')).not.toBeInTheDocument()
     expect(screen.queryByText('Where could this lead?')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidequest preparation', () => {
+  it('shows saved questions as invitations rather than completed investigations', () => {
+    const base = { note: null, url: null, creator: null, release_year: null, work_scope: 'individual' as const, parent_work_title: null, canonical_identity_id: null, progress_status: 'finished' as const, progress_current: null, progress_total: null, progress_unit: 'book' as const, spoiler_policy: 'full' as const, created_at: new Date().toISOString() }
+    const items = [{ ...base, id: 1, kind: 'book' as const, title: 'First' }, { ...base, id: 2, kind: 'book' as const, title: 'Second' }]
+    const invitations = [{ id: 8, item_id: 1, item_title: 'First', source_concept_id: 3, active_concept_id: 3, source_concept_name: 'Shared sensory language', question: 'How can incompatible senses still support a shared language?', status: 'queued' as const, user_note: null, available: true, created_at: base.created_at, updated_at: base.created_at }]
+
+    render(<SidequestsView items={items} conceptCounts={{ 1: 1, 2: 1 }} sidequests={[]} invitations={invitations} busy={false} onExplore={() => undefined} onSurprise={() => undefined} />)
+
+    expect(screen.getByText('Questions you want to follow')).toBeInTheDocument()
+    expect(screen.getByText(invitations[0].question)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '✦ Discover Sidequests' })).toBeEnabled()
+    expect(screen.queryByText(/completed investigation/i)).not.toBeInTheDocument()
   })
 })
 
