@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ValidatedConcept, WorkUnderstanding
+from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ValidatedConcept, WorkUnderstanding, strict_json_schema
 from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, app, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
 from app.quality import candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from app.research import ResearchPacket, RetrievedSource, get_research_provider
@@ -48,6 +48,25 @@ def test_default_database_path_is_stable() -> None:
     assert DB_PATH == BACKEND_DIR / "data" / "asterisk.db"
     assert DB_PATH.is_absolute()
     assert DATA_DIR.is_dir()
+
+
+def test_work_understanding_strict_schema_is_closed_without_profile_dictionary() -> None:
+    schema = strict_json_schema(WorkUnderstanding.model_json_schema())
+
+    assert "curiosity_profile" not in schema["properties"]
+
+    def assert_declared_objects_are_closed(node: object) -> None:
+        if isinstance(node, dict):
+            if isinstance(node.get("properties"), dict):
+                assert node["additionalProperties"] is False
+                assert set(node["required"]) == set(node["properties"])
+            for value in node.values():
+                assert_declared_objects_are_closed(value)
+        elif isinstance(node, list):
+            for value in node:
+                assert_declared_objects_are_closed(value)
+
+    assert_declared_objects_are_closed(schema)
 
 
 def test_create_and_read_item_preserves_user_note(client: TestClient) -> None:
@@ -188,7 +207,7 @@ class FakeAI:
     def understand_work(self, item: dict[str, object], _synthesis: str, _sources: list[dict[str, str]]) -> WorkUnderstanding:
         return WorkUnderstanding(ambiguous_identity=False, confirmation_question="", resolved_title=str(item["title"]), creator="Test creator", release_info="2021", identity_summary="A researched work.", events_and_problems=["A community changes its institutions."], phenomena_and_processes=["Coordination under constraints."], dilemmas_and_decisions=["Actors choose without complete information."], systems_and_causal_relations=["Local choices alter collective outcomes."])
 
-    def identify_research_problems(self, _understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
+    def identify_research_problems(self, _understanding: WorkUnderstanding, work_sources: list[dict[str, str]], _curiosity_profile: dict[str, object] | None = None) -> ResearchProblemBatch:
         return ResearchProblemBatch(problems=[ResearchProblem(problem_id="problem-1", concrete_description="A community changes its institutional rules.", work_situation="The work compares changing social arrangements.", intellectual_question="How do communities test alternative institutional forms?", relevant_domains=["political anthropology"], evidence_source_ids=[work_sources[0]["source_id"]], research_queries=["established term institutional forms testing collective rules"], anchor_kind="system", concise_label="Testing social arrangements", interesting_reason="The work treats political organization as something communities can deliberately vary rather than a fixed evolutionary stage.", distinctiveness="The comparison centers concrete institutional experiments instead of a generic theme of social change.", discovery_mode="deepen_fascination", external_research_warranted=True, discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "medium", "rationale": "A concrete institutional mechanism with cross-domain potential."})])
 
     def extract_evidence_concepts(self, problems: ResearchProblemBatch, _concept_synthesis: str, concept_sources: list[dict[str, str]]) -> EvidenceConceptBatch:
@@ -632,7 +651,7 @@ class WorkFirstDiscoveryAI(FakeAI):
             return NamedWorkAI().resolve_identity(item, synthesis, sources)
         return super().resolve_identity(item, synthesis, sources)
 
-    def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
+    def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]], _curiosity_profile: dict[str, object] | None = None) -> ResearchProblemBatch:
         anchors = self.anchors_by_title[str(understanding.resolved_title)]
         return ResearchProblemBatch(problems=[ResearchProblem(
             problem_id=f"anchor-{index}", anchor_kind=kind, concise_label=label,
@@ -756,7 +775,7 @@ def test_anchor_and_research_limits_are_bounded_and_configurable(client: TestCli
     captured: list[dict[str, object]] = []
 
     class ManyAnchorAI(FakeAI):
-        def identify_research_problems(self, _understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
+        def identify_research_problems(self, _understanding: WorkUnderstanding, work_sources: list[dict[str, str]], _curiosity_profile: dict[str, object] | None = None) -> ResearchProblemBatch:
             kinds = ["event", "relationship", "worldbuilding", "narrative_structure", "tone_or_humor", "motif"]
             return ResearchProblemBatch(problems=[ResearchProblem(
                 problem_id=f"candidate-{index}", anchor_kind=kind, concise_label=f"Distinct mechanism {index}",
@@ -795,8 +814,8 @@ def test_spoiler_boundary_rejects_out_of_scope_observations_without_saving_them(
             return super().research(item)
 
     class LateSpoilerAI(WorkFirstDiscoveryAI):
-        def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
-            batch = super().identify_research_problems(understanding, work_sources)
+        def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]], curiosity_profile: dict[str, object] | None = None) -> ResearchProblemBatch:
+            batch = super().identify_research_problems(understanding, work_sources, curiosity_profile)
             return batch.model_copy(update={"problems": [batch.problems[0].model_copy(update={"spoiler_scope": "full"})]})
 
     item_id = create_item(
@@ -813,6 +832,41 @@ def test_spoiler_boundary_rejects_out_of_scope_observations_without_saving_them(
     assert captured[0]["spoiler_ceiling"] == "within_progress"
     assert captured[0]["progress"] == {"status": "in_progress", "current": 1, "total": 3, "unit": "book"}
     assert client.get(f"/api/items/{item_id}/concepts").json() == []
+
+
+def test_mixed_anchor_batch_keeps_valid_and_reports_discard_categories(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    received_profiles: list[dict[str, object]] = []
+
+    class MixedAnchorAI(WorkFirstDiscoveryAI):
+        def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]], curiosity_profile: dict[str, object] | None = None) -> ResearchProblemBatch:
+            received_profiles.append(curiosity_profile or {})
+            valid = super().identify_research_problems(understanding, work_sources, curiosity_profile).problems[0]
+            invalid_source = valid.model_copy(update={"problem_id": "bad-source", "evidence_source_ids": ["missing-source"]})
+            duplicate = valid.model_copy(update={"concise_label": "A duplicate identifier must not replace the first anchor"})
+            spoiler = valid.model_copy(update={"problem_id": "late-spoiler", "spoiler_scope": "full"})
+            return ResearchProblemBatch(problems=[valid, invalid_source, duplicate, spoiler])
+
+    item_id = create_item(
+        client, title="The Hunger Games", progress_status="in_progress",
+        progress_current=1, progress_total=3, progress_unit="book", spoiler_policy="through_progress",
+    ).json()["id"]
+    manual = client.post(f"/api/items/{item_id}/concepts", json={"name": "Communication across senses", "category": "personal"}).json()
+    client.patch(f"/api/concepts/{manual['id']}/interest", json={"interested": True, "note": "I want to follow this."})
+    app.dependency_overrides[get_ai_client] = lambda: MixedAnchorAI()
+    app.dependency_overrides[get_research_provider] = lambda: WorkOnlyResearch()
+
+    with caplog.at_level("WARNING", logger="app.main"):
+        response = client.post(f"/api/items/{item_id}/enrich")
+
+    assert response.status_code == 200
+    discoveries = [concept for concept in response.json()["concepts"] if concept["concept_classification"] == "grounded_observation"]
+    assert [concept["name"] for concept in discoveries] == ["Spectacle as political control"]
+    assert "kept=1 discarded=3" in caplog.text
+    assert "'duplicate_id': 1" in caplog.text
+    assert "'quality': 1" in caplog.text
+    assert "'spoiler_boundary': 1" in caplog.text
+    assert "A duplicate identifier must not replace" not in caplog.text
+    assert "Communication across senses" in received_profiles[0]["authored_lenses"]
 
 
 def test_saved_research_sources_expose_evidence_roles(client: TestClient) -> None:

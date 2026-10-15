@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import Literal
 
@@ -34,6 +35,8 @@ from .prompts import (
     identity_input,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class AIConfigurationError(RuntimeError):
     pass
@@ -41,6 +44,23 @@ class AIConfigurationError(RuntimeError):
 
 class AIProviderError(RuntimeError):
     pass
+
+
+def strict_json_schema(schema: dict[str, object]) -> dict[str, object]:
+    """Make Pydantic's schema compatible with strict OpenAI-style JSON output."""
+    def close_declared_objects(node: object) -> None:
+        if isinstance(node, dict):
+            if isinstance(node.get("properties"), dict):
+                node["required"] = list(node["properties"])
+                node["additionalProperties"] = False
+            for value in node.values():
+                close_declared_objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                close_declared_objects(value)
+
+    close_declared_objects(schema)
+    return schema
 
 
 class ExtractedConcept(BaseModel):
@@ -118,7 +138,6 @@ class WorkUnderstanding(BaseModel):
     narrative_structures_and_techniques: list[str] = Field(default_factory=list, max_length=8)
     tone_humor_and_motifs: list[str] = Field(default_factory=list, max_length=8)
     spoiler_ceiling: Literal["premise_only", "within_progress", "full"] = "premise_only"
-    curiosity_profile: dict[str, object] = Field(default_factory=dict)
 
 
 class DiscoveryQuality(BaseModel):
@@ -275,17 +294,7 @@ class OpenRouterClient:
     def _structured(self, system: str, user: str, schema: type[BaseModel], name: str, max_tokens: int) -> BaseModel:
         if not self.api_key:
             raise AIConfigurationError("OPENROUTER_API_KEY is not configured. Add it to your local .env file and restart Asterisk.")
-        schema_json = schema.model_json_schema()
-        def require_declared_properties(node: object) -> None:
-            if isinstance(node, dict):
-                if isinstance(node.get("properties"), dict):
-                    node["required"] = list(node["properties"])
-                for value in node.values():
-                    require_declared_properties(value)
-            elif isinstance(node, list):
-                for value in node:
-                    require_declared_properties(value)
-        require_declared_properties(schema_json)
+        schema_json = strict_json_schema(schema.model_json_schema())
         payload = {
             "model": self.model,
             "messages": [
@@ -310,6 +319,7 @@ class OpenRouterClient:
         if response.status_code == 429:
             raise AIProviderError("The AI provider rate limit was reached. Please wait and try again.")
         if response.status_code >= 400:
+            logger.error("AI provider rejected structured request: status=%s", response.status_code)
             raise AIProviderError(f"The AI provider returned an error ({response.status_code}).")
         try:
             body = response.json()
@@ -414,8 +424,8 @@ class OpenRouterClient:
     def understand_work(self, item: dict[str, object], synthesis: str, sources: list[dict[str, str]]) -> WorkUnderstanding:
         return self._structured(UNDERSTANDING_SYSTEM_PROMPT, understanding_input(item, synthesis, sources), WorkUnderstanding, "work_understanding", 1800)  # type: ignore[return-value]
 
-    def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]]) -> ResearchProblemBatch:
-        return self._structured(PROBLEM_SYSTEM_PROMPT, problem_input(understanding.model_dump(), work_sources), ResearchProblemBatch, "research_problems", 2200)  # type: ignore[return-value]
+    def identify_research_problems(self, understanding: WorkUnderstanding, work_sources: list[dict[str, str]], curiosity_profile: dict[str, object] | None = None) -> ResearchProblemBatch:
+        return self._structured(PROBLEM_SYSTEM_PROMPT, problem_input(understanding.model_dump(), work_sources, curiosity_profile), ResearchProblemBatch, "research_problems", 2200)  # type: ignore[return-value]
 
     def extract_evidence_concepts(self, problems: ResearchProblemBatch, concept_synthesis: str, concept_sources: list[dict[str, str]]) -> EvidenceConceptBatch:
         return self._structured(EVIDENCE_EXTRACTION_SYSTEM_PROMPT, evidence_extraction_input([problem.model_dump() for problem in problems.problems], concept_synthesis, concept_sources), EvidenceConceptBatch, "evidence_concepts", 2400)  # type: ignore[return-value]

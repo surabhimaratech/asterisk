@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import combinations
@@ -16,7 +17,7 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, fiel
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, delete, inspect, select, or_
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from .ai import AIConfigurationError, AIProviderError, ConceptValidationBatch, EvidenceConceptBatch, EvidenceConceptCandidate, EntityCandidate, OpenRouterClient, ResearchProblemBatch, get_ai_client
+from .ai import AIConfigurationError, AIProviderError, ConceptValidationBatch, EvidenceConceptBatch, EvidenceConceptCandidate, EntityCandidate, OpenRouterClient, ResearchProblem, ResearchProblemBatch, get_ai_client
 from .quality import candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from .research import ResearchProvider, get_research_provider
 
@@ -33,6 +34,7 @@ if configured_database_url is None and not DB_PATH.exists() and LEGACY_DB_PATH.e
 DATABASE_URL = configured_database_url or f"sqlite:///{DB_PATH}"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 SessionLocal = sessionmaker(bind=engine)
+logger = logging.getLogger(__name__)
 
 class Base(DeclarativeBase):
     pass
@@ -731,6 +733,28 @@ def anchor_within_spoiler_scope(anchor, item: CuriosityItem) -> bool:
     return order[anchor.spoiler_scope] <= order[spoiler_ceiling(item)]
 
 
+def filter_work_anchors(
+    problems: list[ResearchProblem], work_source_ids: set[str], item: CuriosityItem,
+) -> tuple[list[ResearchProblem], list[dict[str, str]]]:
+    """Keep independently valid anchors and return safe, inspectable discard reasons."""
+    valid: list[ResearchProblem] = []
+    discarded: list[dict[str, str]] = []
+    seen_problem_ids: set[str] = set()
+    for problem in problems:
+        if problem.problem_id in seen_problem_ids:
+            discarded.append({"problem_id": problem.problem_id, "category": "duplicate_id", "reason": "Duplicate work-anchor identifier."})
+            continue
+        seen_problem_ids.add(problem.problem_id)
+        if reason := research_problem_rejection(problem, work_source_ids, item.title):
+            discarded.append({"problem_id": problem.problem_id, "category": "quality", "reason": reason})
+            continue
+        if not anchor_within_spoiler_scope(problem, item):
+            discarded.append({"problem_id": problem.problem_id, "category": "spoiler_boundary", "reason": "The proposed observation exceeds the saved spoiler boundary."})
+            continue
+        valid.append(problem)
+    return valid, discarded
+
+
 def identity_key(candidate: EntityCandidate) -> str:
     parts = [candidate.media_type, normalize_concept_term(candidate.title), normalize_concept_term(candidate.creator), str(candidate.release_year or "")]
     if candidate.work_scope != WorkScope.unknown.value:
@@ -1366,7 +1390,7 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
         work_source_payloads = [{"source_id": f"work-{index}", "title": source.title, "excerpt": source.excerpt[:2500]} for index, source in enumerate(packet.sources, 1)]
         work_source_urls = {payload["source_id"]: source.url for payload, source in zip(work_source_payloads, packet.sources)}
         understanding = ai.understand_work(payload, packet.synthesis, work_source_payloads)
-        understanding = understanding.model_copy(update={"spoiler_ceiling": spoiler_ceiling(item), "curiosity_profile": profile})
+        understanding = understanding.model_copy(update={"spoiler_ceiling": spoiler_ceiling(item)})
         if item.kind in {Kind.concept.value, Kind.question.value, Kind.thought.value}:
             understanding = understanding.model_copy(update={"ambiguous_identity": False, "confirmation_question": "", "resolved_title": understanding.resolved_title or item.title, "identity_matches_sources": True})
     except (AIConfigurationError, AIProviderError) as exc:
@@ -1389,16 +1413,28 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
     recovery_source_urls: set[str] = set()
     external_research_error: str | None = None
     try:
-        proposed_anchors = ai.identify_research_problems(understanding, work_source_payloads)
+        proposed_anchors = ai.identify_research_problems(understanding, work_source_payloads, profile)
         work_source_ids = set(work_source_urls)
-        problem_ids = [problem.problem_id for problem in proposed_anchors.problems]
-        if len(problem_ids) != len(set(problem_ids)):
-            raise AIProviderError("Work-anchor generation returned duplicate identifiers. Existing research was preserved.")
-        if problem_reason := next((reason for problem in proposed_anchors.problems if (reason := research_problem_rejection(problem, work_source_ids, item.title))), None):
-            raise AIProviderError(f"Work-anchor validation failed: {problem_reason} Existing research was preserved.")
-        if any(not anchor_within_spoiler_scope(problem, item) for problem in proposed_anchors.problems):
-            raise AIProviderError("Work-anchor validation failed: a proposed observation exceeds the saved spoiler boundary. Existing research was preserved.")
-        selected_anchors, research_anchors = select_diverse_anchors(proposed_anchors.problems, profile_terms(profile))
+        valid_anchors, discarded_anchors = filter_work_anchors(proposed_anchors.problems, work_source_ids, item)
+        if discarded_anchors:
+            categories: dict[str, int] = {}
+            for discarded in discarded_anchors:
+                category = discarded["category"]
+                categories[category] = categories.get(category, 0) + 1
+            logger.warning(
+                "Discarded invalid work anchors: item_id=%s kept=%s discarded=%s categories=%s",
+                item.id, len(valid_anchors), len(discarded_anchors), categories,
+            )
+        if not valid_anchors:
+            reasons = "; ".join(dict.fromkeys(discarded["reason"] for discarded in discarded_anchors))
+            raise AIProviderError(
+                f"No usable work anchors were generated. {reasons} "
+                "Existing research was preserved."
+            )
+
+        selected_anchors, research_anchors = select_diverse_anchors(
+            valid_anchors, profile_terms(profile)
+        )
         # The internal research subset may intentionally be empty: grounded
         # observations do not need external research to be worth preserving.
         problems = ResearchProblemBatch.model_construct(problems=research_anchors)
