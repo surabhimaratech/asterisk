@@ -51,6 +51,8 @@ textarea { resize: vertical; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
 .item { background: #fff; border: 1px solid #e6e1d8; border-radius: 13px; padding: 20px; display: flex; flex-direction: column; min-height: 175px; }
+.item.clickable { cursor: pointer; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+.item.clickable:hover { border-color: #cbbda8; box-shadow: 0 8px 24px rgba(73, 58, 40, .08); transform: translateY(-1px); }
 .item-top { display: flex; justify-content: space-between; align-items: center; }
 .pill { background: #f4f1eb; border-radius: 18px; padding: 5px 10px; font-size: 12px; }
 .date { font-size: 11px; color: #9a9287; }

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { App, ConceptExplorer, DiscoveryCard, RejectedFindingCard, SidequestsView } from './main'
+import { App, ConceptExplorer, DiscoveryCard, ItemCard, RejectedFindingCard, SidequestsView } from './main'
 
 afterEach(() => {
   cleanup()
@@ -28,6 +28,33 @@ describe('media types', () => {
     fireEvent.change(screen.getByLabelText('What does this entry represent?'), { target: { value: 'series' } })
     expect(screen.getByLabelText('Your progress')).toBeInTheDocument()
     expect(screen.getByLabelText('Spoiler boundary')).toHaveValue('avoid')
+  })
+})
+
+describe('curiosity index cards', () => {
+  const item = {
+    id: 21, kind: 'book' as const, title: 'Rendezvous with Rama', note: 'A mysterious visitor.', url: 'https://example.com/rama',
+    creator: 'Arthur C. Clarke', release_year: 1973, work_scope: 'individual' as const, parent_work_title: null,
+    canonical_identity_id: null, progress_status: 'finished' as const, progress_current: null, progress_total: null,
+    progress_unit: 'book' as const, spoiler_policy: 'full' as const, created_at: new Date().toISOString(),
+  }
+
+  it('opens concepts from the card while keeping its controls independent', () => {
+    const onExplore = vi.fn()
+    const onEdit = vi.fn()
+    render(<ItemCard item={item} conceptCount={0} onExplore={onExplore} onEdit={onEdit} onRemove={async () => undefined} />)
+
+    fireEvent.click(screen.getByRole('article'))
+    expect(onExplore).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(onEdit).toHaveBeenCalledOnce()
+    expect(onExplore).toHaveBeenCalledOnce()
+  })
+
+  it('labels previously extracted concepts as viewable', () => {
+    render(<ItemCard item={item} conceptCount={3} onExplore={() => undefined} onEdit={() => undefined} onRemove={async () => undefined} />)
+    expect(screen.getByRole('button', { name: 'View Concepts' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Explore Concepts' })).not.toBeInTheDocument()
   })
 })
 

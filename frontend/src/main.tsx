@@ -273,7 +273,7 @@ export function App() {
 
       {loading ? <div className="empty">Loading your library…</div> : view === 'index' ? (visible.length === 0 ?
         <div className="empty">{items.length === 0 ? 'Your library is waiting for its first curiosity. Save a book, question, or passing thought above.' : 'No curiosities match your search and filter.'}</div> :
-        <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} onEdit={edit} onRemove={remove} onExplore={exploreConcepts} />)}</div>) : <>
+        <div className="cards">{visible.map(item => <ItemCard key={item.id} item={item} conceptCount={conceptCounts[item.id] || 0} onEdit={edit} onRemove={remove} onExplore={exploreConcepts} />)}</div>) : <>
         <RoomShell items={items} query={query} focusedZone={focusedZone} onFocus={focusZone} />
         {focusedZone && <div className="room-focus-nav"><button type="button" onClick={returnToRoom}>← Back to room</button><span>{labels[focusedZone]} collection</span></div>}
         {!focusedZone && <div className="room-invitation"><span>✦</span><p>Wander in. Choose a corner of the room to look closer.</p></div>}
@@ -338,7 +338,7 @@ export function App() {
         </div>}</>}
     </section>
 
-    {selectedItem && <div className="concept-callout"><span>✦ Look beneath the surface</span><button type="button" onClick={() => exploreConcepts(selectedItem)}>Explore Concepts</button></div>}
+    {selectedItem && <div className="concept-callout"><span>✦ Look beneath the surface</span><button type="button" onClick={() => exploreConcepts(selectedItem)}>{conceptCounts[selectedItem.id] > 0 ? 'View Concepts' : 'Explore Concepts'}</button></div>}
     {conceptItem && <ConceptExplorer item={conceptItem} onClose={() => setConceptItem(null)} onError={setError} onChange={count => setConceptCounts(current => ({ ...current, [conceptItem.id]: count }))} onInvitationsChange={refreshExplorationInvitations} />}
 
     <SidequestsView items={items} conceptCounts={conceptCounts} sidequests={sidequests} invitations={explorationInvitations} busy={sidequestBusy} onExplore={exploreConcepts} onSurprise={() => void surpriseMe()} />
@@ -348,13 +348,13 @@ export function App() {
   </main>
 }
 
-function ItemCard({ item, onEdit, onRemove, onExplore }: { item: Item; onEdit: (item: Item) => void; onRemove: (item: Item) => void; onExplore: (item: Item) => void }) {
-  return <article className="item">
+export function ItemCard({ item, conceptCount, onEdit, onRemove, onExplore }: { item: Item; conceptCount: number; onEdit: (item: Item) => void; onRemove: (item: Item) => void; onExplore: (item: Item) => void }) {
+  return <article className="item clickable" onClick={() => onExplore(item)}>
     <div className="item-top"><span className="pill">{icons[item.kind]} {labels[item.kind]}</span><span className="date">{new Date(item.created_at).toLocaleDateString()}</span></div>
     <h3>{item.title}</h3>
     {item.note && <p>{item.note}</p>}
-    {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open source ↗</a>}
-    <div className="item-actions"><button onClick={() => onExplore(item)}>Explore Concepts</button><button onClick={() => onEdit(item)}>Edit</button><button onClick={() => void onRemove(item)}>Delete</button></div>
+    {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={event => event.stopPropagation()}>Open source ↗</a>}
+    <div className="item-actions"><button onClick={event => { event.stopPropagation(); onExplore(item) }}>{conceptCount > 0 ? 'View Concepts' : 'Explore Concepts'}</button><button onClick={event => { event.stopPropagation(); onEdit(item) }}>Edit</button><button onClick={event => { event.stopPropagation(); void onRemove(item) }}>Delete</button></div>
   </article>
 }
 
