@@ -2,13 +2,13 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from itertools import combinations
 from pathlib import Path
 from urllib.parse import urlparse
 import json
 import os
 import re
 import shutil
+import uuid
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -18,7 +18,7 @@ from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, Uniqu
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .ai import AIConfigurationError, AIProviderError, ConceptValidationBatch, EvidenceConceptBatch, EvidenceConceptCandidate, EntityCandidate, OpenRouterClient, ResearchProblem, ResearchProblemBatch, get_ai_client
-from .quality import candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
+from .quality import assess_research_problem, candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from .research import ResearchProvider, get_research_provider
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -200,6 +200,11 @@ class Sidequest(Base):
     discovery_kind: Mapped[str] = mapped_column(String(40), default="unexpected_connection")
     invitation: Mapped[str] = mapped_column(String(300), default="")
     dedupe_key: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    detective_version: Mapped[int] = mapped_column(Integer, default=0)
+    clue_json: Mapped[str] = mapped_column(Text, default="{}")
+    lead_json: Mapped[str] = mapped_column(Text, default="{}")
+    reasoning_json: Mapped[str] = mapped_column(Text, default="[]")
+    claims_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class ItemEnrichment(Base):
@@ -488,6 +493,11 @@ class SidequestRead(BaseModel):
     origin_titles: list[str]
     discovery_kind: str
     invitation: str
+    detective_version: int
+    clue: dict[str, object] | None
+    lead: dict[str, object] | None
+    reasoning_steps: list[str]
+    claims: list[dict[str, object]]
     created_at: datetime
 
 
@@ -585,7 +595,7 @@ def migrate_additive_columns(target_engine=engine, database_url: str = DATABASE_
     additions = {
         "curiosity_items": {"creator": "VARCHAR(300)", "release_year": "INTEGER", "work_scope": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "parent_work_title": "VARCHAR(300)", "canonical_identity_id": "VARCHAR(300)", "progress_status": "VARCHAR(30) NOT NULL DEFAULT 'unknown'", "progress_current": "INTEGER", "progress_total": "INTEGER", "progress_unit": "VARCHAR(30) NOT NULL DEFAULT 'installment'", "spoiler_policy": "VARCHAR(30) NOT NULL DEFAULT 'avoid'"},
         "item_concepts": {"canonical_concept_id": "INTEGER REFERENCES canonical_concepts(id)", "level": "VARCHAR(20)", "relationship": "TEXT", "evidence_status": "VARCHAR(40)", "confidence": "FLOAT", "canonical_name": "VARCHAR(160)", "definition": "TEXT", "domain": "VARCHAR(120)", "mechanism": "TEXT", "relationship_type": "VARCHAR(20)", "relationship_evidence": "TEXT", "concept_verification": "VARCHAR(30)", "label_kind": "VARCHAR(30)", "curiosity_hook": "TEXT", "discovery_origin": "VARCHAR(30)", "research_path": "TEXT", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "review_audit_id": "INTEGER REFERENCES concept_lead_audits(id)", "user_note": "TEXT", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "appeal_dimensions_json": "TEXT NOT NULL DEFAULT '[]'", "pattern_scope": "VARCHAR(40)", "spoiler_scope": "VARCHAR(30) NOT NULL DEFAULT 'premise_only'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME", "superseded_at": "DATETIME"},
-        "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'", "origin_item_ids_json": "TEXT NOT NULL DEFAULT '[]'", "discovery_kind": "VARCHAR(40) NOT NULL DEFAULT 'unexpected_connection'", "invitation": "VARCHAR(300) NOT NULL DEFAULT ''", "dedupe_key": "VARCHAR(64)"},
+        "sidequests": {"concepts_json": "TEXT NOT NULL DEFAULT '[]'", "evidence_json": "TEXT NOT NULL DEFAULT '[]'", "origin_item_ids_json": "TEXT NOT NULL DEFAULT '[]'", "discovery_kind": "VARCHAR(40) NOT NULL DEFAULT 'unexpected_connection'", "invitation": "VARCHAR(300) NOT NULL DEFAULT ''", "dedupe_key": "VARCHAR(64)", "detective_version": "INTEGER NOT NULL DEFAULT 0", "clue_json": "TEXT NOT NULL DEFAULT '{}'", "lead_json": "TEXT NOT NULL DEFAULT '{}'", "reasoning_json": "TEXT NOT NULL DEFAULT '[]'", "claims_json": "TEXT NOT NULL DEFAULT '[]'"},
         "concept_sources": {"support_kind": "VARCHAR(20) NOT NULL DEFAULT 'relationship'"},
         "canonical_concepts": {"aliases_json": "TEXT NOT NULL DEFAULT '[]'", "label_kind": "VARCHAR(30) NOT NULL DEFAULT 'established_term'"},
         "concept_lead_audits": {"stage": "VARCHAR(30) NOT NULL DEFAULT 'concept_candidate'", "discovery_origin": "VARCHAR(30)", "discovery_source_ids_json": "TEXT NOT NULL DEFAULT '[]'", "research_path": "TEXT", "initial_validation_outcome": "TEXT", "recovery_attempt_json": "TEXT NOT NULL DEFAULT '{}'", "final_validation_outcome": "TEXT", "candidate_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "validation_snapshot_json": "TEXT NOT NULL DEFAULT '{}'", "source_snapshot_json": "TEXT NOT NULL DEFAULT '[]'", "automated_evidence_status": "VARCHAR(30) NOT NULL DEFAULT 'unverified'", "human_review_status": "VARCHAR(20) NOT NULL DEFAULT 'pending'", "human_review_note": "TEXT", "review_history_json": "TEXT NOT NULL DEFAULT '[]'", "kept_concept_id": "INTEGER", "last_evaluated_at": "DATETIME", "evidence_review_detail": "TEXT", "superseded_at": "DATETIME", "concept_classification": "VARCHAR(40)", "evidence_form": "VARCHAR(20)", "feedback_key": "VARCHAR(64)", "discovery_mode": "VARCHAR(40)", "discovery_quality_json": "TEXT NOT NULL DEFAULT '{}'", "interested": "BOOLEAN NOT NULL DEFAULT 0", "interest_note": "TEXT", "interested_at": "DATETIME", "loved": "BOOLEAN NOT NULL DEFAULT 0", "love_note": "TEXT", "loved_at": "DATETIME", "surprised": "BOOLEAN NOT NULL DEFAULT 0", "surprise_note": "TEXT", "surprised_at": "DATETIME"},
@@ -632,16 +642,95 @@ def ai_http_error(exc: Exception) -> HTTPException:
     return HTTPException(502, str(exc))
 
 def sidequest_rejection_detail(reason: str | None = None) -> str:
-    guidance = "Try adding more specific notes or concepts to each curiosity, then try again."
+    guidance = "No compelling case yet. Try adding a more concrete note or discovery, then follow another clue."
     if reason and reason.strip():
-        return f"Asterisk found possible links, but none were strong enough to save as a Sidequest. {reason.strip()} {guidance}"
-    return f"Asterisk did not find a connection strong enough to save as a Sidequest. {guidance}"
+        return f"Asterisk investigated the available leads but did not save a Sidequest. {reason.strip()} {guidance}"
+    return guidance
+
+
+def sidequest_log_reason(reason: str | None) -> str:
+    """Keep diagnostics useful without copying URLs or unbounded model text into logs."""
+    compact = " ".join((reason or "unspecified").split())
+    return re.sub(r"https?://\S+", "[url]", compact)[:300]
+
+
+def log_sidequest_stage(run_id: str, stage: str, **details: object) -> None:
+    logger.info(
+        "sidequest_diagnostic %s",
+        json.dumps({"run_id": run_id, "stage": stage, **details}, sort_keys=True),
+    )
+
+
+def sidequest_provenance_rejection(
+    candidate, allowed_origins: set[frozenset[int]], source_registry: dict[str, dict[str, object]],
+    concept_names_by_item: dict[int, set[str]],
+) -> str | None:
+    """Validate detective structure and provenance without judging subjective interestingness."""
+    origin_ids = list(dict.fromkeys(candidate.origin_item_ids or [candidate.item_a_id, candidate.item_b_id]))
+    if frozenset(origin_ids) not in allowed_origins:
+        return "The proposed investigation does not come from one of the supplied clue dossiers."
+    if candidate.clue_item_id not in origin_ids:
+        return "The clue does not identify one of the investigation's originating curiosities."
+    if not candidate.clue.strip() or not candidate.lead.strip():
+        return "The investigation must name both a concrete clue and the lead it follows."
+    if not 2 <= len(candidate.reasoning_steps) <= 4 or any(not step.strip() for step in candidate.reasoning_steps):
+        return "The investigation needs a concise trail of two to four meaningful reasoning steps."
+    if not candidate.claims:
+        return "The investigation does not distinguish facts, interpretations, and open hypotheses."
+    available_concepts = concept_names_by_item.get(candidate.clue_item_id, set())
+    if not candidate.clue_concept_names or any(normalize_concept_term(name) not in available_concepts for name in candidate.clue_concept_names):
+        return "The clue cites a concept that is not present in its supplied dossier."
+    normalized_clue_concepts = {normalize_concept_term(name) for name in candidate.clue_concept_names}
+    supplied_source_ids = set(source_registry)
+    referenced_source_ids = {
+        *candidate.clue_source_ids, *candidate.lead_source_ids,
+        *(source_id for claim in candidate.claims for source_id in claim.source_ids),
+    }
+    if not referenced_source_ids <= supplied_source_ids:
+        return "The investigation cites evidence that was not supplied in its clue dossiers."
+    for source_id in candidate.clue_source_ids:
+        source = source_registry[source_id]
+        source_concepts = {normalize_concept_term(str(name)) for name in source.get("concept_names", [])}
+        if source.get("item_id") != candidate.clue_item_id or not (source_concepts & normalized_clue_concepts):
+            return "The clue cites a source that belongs to a different item or concept."
+    for claim in candidate.claims:
+        if claim.claim_type == "supported_fact":
+            if not claim.source_ids:
+                return "A supported factual claim is missing eligible source evidence."
+            if any(not source_registry[source_id].get("eligible_for_supported_fact") for source_id in claim.source_ids):
+                return "A supported factual claim relies on a source that is not eligible as evidence."
+    if candidate.lead_kind == "unfamiliar_subject" and not candidate.lead_source_ids:
+        if not any(claim.claim_type in {"interpretation", "speculative_hypothesis"} for claim in candidate.claims):
+            return "An unfamiliar, unsourced lead must remain an interpretation or open hypothesis."
+    if hasattr(candidate, "concepts_used"):
+        available_origin_concepts = set().union(*(concept_names_by_item.get(item_id, set()) for item_id in origin_ids))
+        if any(normalize_concept_term(name) not in available_origin_concepts for name in candidate.concepts_used):
+            return "The investigation names a concept that is not present in its originating dossiers."
+    return None
+
+
+def sidequest_is_duplicate(saved: Sidequest, origin_ids: frozenset[int], clue: str, lead: str, bridge: str, connection: str, dedupe_key: str) -> bool:
+    saved_origin = frozenset(json.loads(saved.origin_item_ids_json or "[]") or (saved.item_a_id, saved.item_b_id))
+    if saved_origin != origin_ids:
+        return False
+    if saved.dedupe_key == dedupe_key or normalize_concept_term(saved.bridge) == normalize_concept_term(bridge):
+        return True
+    saved_clue = json.loads(saved.clue_json or "{}").get("text", "")
+    saved_lead = json.loads(saved.lead_json or "{}").get("text", "")
+    clue_overlap = token_overlap(idea_tokens(saved_clue, saved.bridge), idea_tokens(clue, bridge))
+    lead_overlap = token_overlap(idea_tokens(saved_lead, saved.connection), idea_tokens(lead, connection))
+    shared_clue = len(idea_tokens(saved_clue, saved.bridge) & idea_tokens(clue, bridge))
+    shared_lead = len(idea_tokens(saved_lead, saved.connection) & idea_tokens(lead, connection))
+    return clue_overlap >= 0.68 and lead_overlap >= 0.62 and shared_clue >= 3 and shared_lead >= 3
+
 
 def sidequest_read(sidequest: Sidequest, db: Session) -> SidequestRead:
     item_a = db.get(CuriosityItem, sidequest.item_a_id)
     item_b = db.get(CuriosityItem, sidequest.item_b_id)
     origin_ids = json.loads(sidequest.origin_item_ids_json or "[]") or list(dict.fromkeys((sidequest.item_a_id, sidequest.item_b_id)))
     origin_items = [db.get(CuriosityItem, item_id) for item_id in origin_ids]
+    clue = json.loads(sidequest.clue_json or "{}")
+    lead = json.loads(sidequest.lead_json or "{}")
     return SidequestRead(
         **{column.name: getattr(sidequest, column.name) for column in Sidequest.__table__.columns},
         item_a_title=item_a.title if item_a else "Deleted curiosity",
@@ -650,6 +739,10 @@ def sidequest_read(sidequest: Sidequest, db: Session) -> SidequestRead:
         evidence=json.loads(sidequest.evidence_json or "[]"),
         origin_item_ids=origin_ids,
         origin_titles=[item.title if item else "Deleted curiosity" for item in origin_items],
+        clue=clue or None,
+        lead=lead or None,
+        reasoning_steps=json.loads(sidequest.reasoning_json or "[]"),
+        claims=json.loads(sidequest.claims_json or "[]"),
     )
 
 
@@ -953,6 +1046,7 @@ def anchor_within_spoiler_scope(anchor, item: CuriosityItem) -> bool:
 
 def filter_work_anchors(
     problems: list[ResearchProblem], work_source_ids: set[str], item: CuriosityItem,
+    work_source_text: dict[str, str] | None = None,
 ) -> tuple[list[ResearchProblem], list[dict[str, str]]]:
     """Keep independently valid anchors and return safe, inspectable discard reasons."""
     valid: list[ResearchProblem] = []
@@ -963,13 +1057,20 @@ def filter_work_anchors(
             discarded.append({"problem_id": problem.problem_id, "category": "duplicate_id", "reason": "Duplicate work-anchor identifier."})
             continue
         seen_problem_ids.add(problem.problem_id)
-        if reason := research_problem_rejection(problem, work_source_ids, item.title):
+        if reason := research_problem_rejection(problem, work_source_ids, item.title, work_source_text):
             discarded.append({"problem_id": problem.problem_id, "category": "quality", "reason": reason})
             continue
         if not anchor_within_spoiler_scope(problem, item):
             discarded.append({"problem_id": problem.problem_id, "category": "spoiler_boundary", "reason": "The proposed observation exceeds the saved spoiler boundary."})
             continue
-        valid.append(problem)
+        assessed = assess_research_problem(problem, work_source_text)
+        assessed_quality = problem.discovery_quality.model_copy(update={
+            "specificity": assessed["specificity"],
+            "intellectual_substance": assessed["insight"],
+            "surprise_potential": assessed["curiosity_potential"],
+            "rationale": f"{problem.discovery_quality.rationale} {assessed['rationale']}".strip()[:700],
+        })
+        valid.append(problem.model_copy(update={"discovery_quality": assessed_quality}))
     return valid, discarded
 
 
@@ -1633,7 +1734,10 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
     try:
         proposed_anchors = ai.identify_research_problems(understanding, work_source_payloads, profile)
         work_source_ids = set(work_source_urls)
-        valid_anchors, discarded_anchors = filter_work_anchors(proposed_anchors.problems, work_source_ids, item)
+        work_source_text = {
+            source["source_id"]: f"{source['title']} {source['excerpt']}" for source in work_source_payloads
+        }
+        valid_anchors, discarded_anchors = filter_work_anchors(proposed_anchors.problems, work_source_ids, item, work_source_text)
         if discarded_anchors:
             categories: dict[str, int] = {}
             for discarded in discarded_anchors:
@@ -1643,13 +1747,9 @@ def enrich_item(item_id: int, data: EnrichmentRequest | None = None, db: Session
                 "Discarded invalid work anchors: item_id=%s kept=%s discarded=%s categories=%s",
                 item.id, len(valid_anchors), len(discarded_anchors), categories,
             )
-        if not valid_anchors:
+        if not valid_anchors and any(discarded["category"] != "quality" for discarded in discarded_anchors):
             reasons = "; ".join(dict.fromkeys(discarded["reason"] for discarded in discarded_anchors))
-            raise AIProviderError(
-                f"No usable work anchors were generated. {reasons} "
-                "Existing research was preserved."
-            )
-
+            raise AIProviderError(f"No spoiler-safe, valid work anchors were generated. {reasons} Existing research was preserved.")
         selected_anchors, research_anchors = select_diverse_anchors(
             valid_anchors, profile_terms(profile)
         )
@@ -1953,6 +2053,7 @@ def list_sidequests(db: Session = Depends(get_db)):
 
 @app.post("/api/sidequests/surprise", response_model=SidequestRead, status_code=201)
 def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client)):
+    run_id = uuid.uuid4().hex[:12]
     items = db.scalars(select(CuriosityItem).order_by(CuriosityItem.id)).all()
     concepts = visible_item_concepts(list(db.scalars(select(ItemConcept).where(ItemConcept.superseded_at.is_(None)).order_by(ItemConcept.item_id, ItemConcept.id)).all()), db)
     by_item: dict[int, list[ItemConcept]] = {}
@@ -1971,129 +2072,209 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         for name in json.loads(saved_concepts or "[]"):
             previous_terms.add(normalize_concept_term(str(name)))
 
-    def pair_factors(pair: tuple[CuriosityItem, CuriosityItem]) -> dict[str, int]:
-        item_a, item_b = pair
-        a_concepts, b_concepts = by_item[item_a.id], by_item[item_b.id]
-        combined = [*a_concepts, *b_concepts]
-        a_terms = {normalize_concept_term(concept.name) for concept in a_concepts}
-        b_terms = {normalize_concept_term(concept.name) for concept in b_concepts}
-        return {
-            "interest": sum(1 for concept in combined if concept.interested),
-            "love": sum(1 for concept in combined if concept.loved),
-            "surprise": min(1, sum(1 for concept in combined if concept.surprised)),
-            "curiosity_potential": min(2, sum(1 for concept in combined if concept.id in invitation_by_concept)),
-            "mechanisms": sum(1 for concept in combined if concept.level == "mechanism" or concept.category == "mechanism"),
-            "grounded_discoveries": sum(1 for concept in combined if concept.concept_classification in {"established_concept", "grounded_interpretation", "grounded_observation"}),
-            "media_diversity": 1 if item_a.kind != item_b.kind else 0,
-            "overlap_penalty": len(a_terms & b_terms),
-            "repetition_penalty": sum(1 for term in a_terms | b_terms if term in previous_terms),
-        }
-
-    def pair_score(pair: tuple[CuriosityItem, CuriosityItem]) -> tuple[int, int, int]:
-        factors = pair_factors(pair)
-        # Personal feedback raises relevance but is deliberately capped by small
-        # weights; mechanism, grounding, diversity, and repetition remain visible.
-        score = (
-            factors["interest"] * 4 + factors["love"] * 6 + factors["surprise"] * 2
-            + factors["curiosity_potential"] * 3
-            + factors["mechanisms"] * 2 + factors["grounded_discoveries"]
-            + factors["media_diversity"] * 2 - factors["overlap_penalty"] * 2
-            - factors["repetition_penalty"] * 2
-        )
-        item_a, item_b = pair
-        return (score, -item_a.id, -item_b.id)
-
-    pairs = sorted(combinations(eligible, 2), key=pair_score, reverse=True)
-    selected_pairs = pairs[:5]
-    exploration_pair = next((pair for pair in pairs if pair not in selected_pairs and not any((concept.interested or concept.loved or concept.surprised) for item in pair for concept in by_item[item.id])), None)
-    if exploration_pair is not None:
-        selected_pairs.append(exploration_pair)
-    def item_score(item: CuriosityItem) -> tuple[int, int]:
-        item_concepts = by_item[item.id]
-        score = (
-            (5 if item.kind == Kind.thought.value else 0)
-            + min(2, sum(1 for concept in item_concepts if concept.id in invitation_by_concept)) * 4
-            + sum(int(concept.interested) + 2 * int(concept.loved) + int(concept.surprised) for concept in item_concepts)
-            + sum(1 for concept in item_concepts if concept.level == "mechanism" or concept.category == "mechanism")
-        )
-        return (score, -item.id)
-
-    selected_singles = sorted(eligible, key=item_score, reverse=True)[:3]
-    if not selected_pairs and not selected_singles:
+    if not eligible:
+        log_sidequest_stage(run_id, "final", outcome="insufficient_data", saved=False)
         raise HTTPException(422, "Add a concept or discovery to at least one curiosity before discovering Sidequests.")
 
     def concept_payload(concept: ItemConcept) -> dict[str, object]:
-        source_urls = [] if concept.origin == "user_kept" else list(db.scalars(select(ResearchSource.url).join(ConceptSource, ConceptSource.source_id == ResearchSource.id).where(ConceptSource.concept_id == concept.id)).all())
-        generic = any(re.search(pattern, concept.name.casefold()) for pattern in (r"\bcoming of age\b", r"\bteam dynamics\b", r"\boppression\b", r"\bmilitary strateg"))
+        source_rows = [] if concept.origin == "user_kept" else db.execute(
+            select(ResearchSource, ConceptSource.support_kind)
+            .join(ConceptSource, ConceptSource.source_id == ResearchSource.id)
+            .where(ConceptSource.concept_id == concept.id, ResearchSource.superseded_at.is_(None))
+            .order_by(ResearchSource.id)
+            .limit(2)
+        ).all()
+        sources = [{
+            "source_id": f"source-{source.id}", "url": source.url, "title": source.title,
+            "excerpt": source.excerpt[:900], "support_kind": support_kind,
+            "item_id": concept.item_id, "concept_names": [concept.name],
+            "eligible_for_supported_fact": source.retrieval_status == "retrieved" and concept.origin != "user_kept",
+        } for source, support_kind in source_rows]
         invitation = invitation_by_concept.get(concept.id)
-        return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "mechanism": concept.mechanism, "relationship": concept.relationship, "evidence_status": concept.evidence_status or "unverified", "spoiler_scope": concept.spoiler_scope, "human_kept": concept.origin == "user_kept", "interested": concept.interested, "loved": concept.loved, "surprised": concept.surprised, "saved_exploration": {"question": invitation.question, "user_note": invitation.user_note} if invitation else None, "discovery_mode": concept.discovery_mode, "discovery_quality": json.loads(concept.discovery_quality_json or "{}"), "discovery_priority": "low" if generic else "high" if concept.level == "mechanism" else "normal", "sources": source_urls}
+        return {"name": concept.name, "level": concept.level or "legacy", "classification": concept.concept_classification or "legacy", "explanation": concept.explanation, "mechanism": concept.mechanism, "relationship": concept.relationship, "relationship_evidence": concept.relationship_evidence, "evidence_status": concept.evidence_status or "unverified", "spoiler_scope": concept.spoiler_scope, "human_kept": concept.origin == "user_kept", "interested": concept.interested, "loved": concept.loved, "surprised": concept.surprised, "saved_exploration": {"question": invitation.question, "user_note": invitation.user_note} if invitation else None, "discovery_mode": concept.discovery_mode, "discovery_quality": json.loads(concept.discovery_quality_json or "{}"), "discovery_priority": "high" if concept.level == "mechanism" or sources else "normal", "sources": sources}
 
+    quality_order = {"high": 2, "medium": 1, "low": 0}
+    def clue_score(concept: dict[str, object]) -> tuple[int, int, int, int, int, int, int]:
+        quality = concept.get("discovery_quality") if isinstance(concept.get("discovery_quality"), dict) else {}
+        name = normalize_concept_term(str(concept.get("name", "")))
+        return (
+            quality_order.get(str(quality.get("specificity", "low")), 0),
+            quality_order.get(str(quality.get("intellectual_substance", "low")), 0),
+            int(bool(concept.get("sources"))),
+            int(bool(concept.get("mechanism") or concept.get("relationship_evidence"))),
+            int(bool(concept.get("saved_exploration"))),
+            int(bool(concept.get("interested"))) + 2 * int(bool(concept.get("loved"))) + int(bool(concept.get("surprised"))),
+            -int(name in previous_terms),
+        )
+
+    item_payload_cache: dict[int, dict[str, object]] = {}
     def item_payload(item: CuriosityItem) -> dict[str, object]:
-        return {**item_ai_payload(item), "id": item.id, "concepts": [concept_payload(concept) for concept in by_item[item.id]]}
+        if item.id in item_payload_cache:
+            return item_payload_cache[item.id]
+        concepts = [concept_payload(concept) for concept in by_item[item.id]]
+        payload = {**item_ai_payload(item), "id": item.id, "concepts": sorted(concepts, key=clue_score, reverse=True)[:3]}
+        item_payload_cache[item.id] = payload
+        return payload
+
+    max_contexts = max(1, min(int(os.getenv("SIDEQUEST_MAX_CONTEXTS", "8")), 12))
+    payloads = {item.id: item_payload(item) for item in eligible}
+    clue_candidates = [
+        (clue_score(concept), item, concept)
+        for item in eligible for concept in payloads[item.id]["concepts"]
+    ]
+    primary_clues = [max((candidate for candidate in clue_candidates if candidate[1].id == item.id), key=lambda candidate: candidate[0]) for item in eligible]
+    selected_clues = sorted(primary_clues, key=lambda candidate: (*candidate[0], -candidate[1].id), reverse=True)[:max_contexts]
+    if len(selected_clues) < max_contexts:
+        remaining = sorted((candidate for candidate in clue_candidates if candidate not in selected_clues), key=lambda candidate: (*candidate[0], -candidate[1].id), reverse=True)
+        selected_clues.extend(remaining[:max_contexts - len(selected_clues)])
 
     candidate_contexts: list[dict[str, object]] = []
     allowed_origins: set[frozenset[int]] = set()
-    for item_a, item_b in selected_pairs:
-        allowed_origins.add(frozenset((item_a.id, item_b.id)))
-        candidate_contexts.append({"mode": "connection", "item_a": item_payload(item_a), "item_b": item_payload(item_b)})
-    for item in selected_singles:
-        allowed_origins.add(frozenset((item.id,)))
-        candidate_contexts.append({"mode": "single_item_direction", "item_a": item_payload(item), "item_b": None})
-    max_contexts = max(1, min(int(os.getenv("SIDEQUEST_MAX_CONTEXTS", "8")), 12))
-    candidate_contexts = candidate_contexts[:max_contexts]
-    allowed_origins = {frozenset((context["item_a"]["id"], context["item_b"]["id"])) if context["item_b"] else frozenset((context["item_a"]["id"],)) for context in candidate_contexts}  # type: ignore[index]
+    for _score, clue_item, focus_concept in selected_clues:
+        clue_payload = {**payloads[clue_item.id], "concepts": [focus_concept]}
+        other_items = sorted(
+            (item for item in eligible if item.id != clue_item.id),
+            key=lambda item: (item.kind != clue_item.kind, clue_score(payloads[item.id]["concepts"][0]), -item.id),
+            reverse=True,
+        )[:4]
+        possible_leads = [{**payloads[item.id], "concepts": payloads[item.id]["concepts"][:1]} for item in other_items]
+        candidate_contexts.append({
+            "mode": "clue_investigation", "focus_concept": focus_concept["name"],
+            "item_a": clue_payload, "item_b": None, "possible_library_leads": possible_leads,
+        })
+        allowed_origins.add(frozenset((clue_item.id,)))
+        allowed_origins.update(frozenset((clue_item.id, item.id)) for item in other_items)
+
+    log_sidequest_stage(
+        run_id, "contexts",
+        clue_dossiers=len({int(context["item_a"]["id"]) for context in candidate_contexts}),
+        candidate_contexts=len(candidate_contexts),
+        optional_library_leads=sum(len(context["possible_library_leads"]) for context in candidate_contexts),
+    )
+
+    source_registry: dict[str, dict[str, object]] = {}
+    concept_names_by_item: dict[int, set[str]] = {}
+    for context in candidate_contexts:
+        context_items = [context["item_a"], *context["possible_library_leads"]]
+        for payload in context_items:
+            item_id = int(payload["id"])
+            concept_names_by_item.setdefault(item_id, set())
+            for concept in payload["concepts"]:
+                concept_names_by_item[item_id].add(normalize_concept_term(str(concept["name"])))
+                for source in concept["sources"]:
+                    source_id = str(source["source_id"])
+                    if source_id in source_registry:
+                        names = list(dict.fromkeys([*source_registry[source_id].get("concept_names", []), *source.get("concept_names", [])]))
+                        source_registry[source_id]["concept_names"] = names
+                    else:
+                        source_registry[source_id] = source
 
     def candidate_origin_ids(candidate) -> list[int]:
         return list(dict.fromkeys(candidate.origin_item_ids or [candidate.item_a_id, candidate.item_b_id]))
 
     try:
         generated = ai.generate_candidates(candidate_contexts)
+        log_sidequest_stage(run_id, "generation", generated_candidates=len(generated.candidates))
         normalized_candidates = [candidate.model_copy(update={
             "origin_item_ids": candidate_origin_ids(candidate),
             "invitation": candidate.invitation or candidate.new_question,
         }) for candidate in generated.candidates]
-        grounded_candidates = [candidate for candidate in normalized_candidates if frozenset(candidate_origin_ids(candidate)) in allowed_origins]
-        if not grounded_candidates:
-            raise AIProviderError("No grounded connection candidates were returned.")
-        rejected_reasons = [reason for candidate in grounded_candidates if (reason := deterministic_rejection_reason(candidate))]
-        valid_candidates = [candidate for candidate in grounded_candidates if deterministic_rejection_reason(candidate) is None]
+        if not normalized_candidates:
+            reason = "Candidate generation returned no leads worth investigating."
+            log_sidequest_stage(run_id, "validation", generated_candidates=0, rejected_candidates=0, rejection_reasons={}, sent_to_critic=0)
+            log_sidequest_stage(run_id, "final", outcome="no_generated_candidates", reason=reason, saved=False)
+            raise HTTPException(422, sidequest_rejection_detail(reason))
+        rejected_reasons: list[str] = []
+        valid_candidates = []
+        for candidate in normalized_candidates:
+            reason = deterministic_rejection_reason(candidate) or sidequest_provenance_rejection(
+                candidate, allowed_origins, source_registry, concept_names_by_item,
+            )
+            if reason:
+                rejected_reasons.append(reason)
+            else:
+                valid_candidates.append(candidate)
+        rejection_counts: dict[str, int] = {}
+        for reason in rejected_reasons:
+            safe_reason = sidequest_log_reason(reason)
+            rejection_counts[safe_reason] = rejection_counts.get(safe_reason, 0) + 1
+        log_sidequest_stage(
+            run_id, "validation",
+            generated_candidates=len(normalized_candidates),
+            rejected_candidates=len(rejected_reasons),
+            rejection_reasons=rejection_counts,
+            sent_to_critic=len(valid_candidates),
+        )
         if not valid_candidates:
             summary = "; ".join(dict.fromkeys(rejected_reasons))
-            raise HTTPException(422, f"No compelling connection found. {summary} Try enriching more varied curiosities or adding more specific concepts.")
-        final = ai.critique_candidates([candidate.model_dump() for candidate in valid_candidates])
+            log_sidequest_stage(run_id, "final", outcome="all_candidates_rejected", reason=sidequest_log_reason(summary), saved=False)
+            raise HTTPException(422, sidequest_rejection_detail(summary))
+        final = ai.critique_candidates([candidate.model_dump() for candidate in valid_candidates], candidate_contexts)
+        log_sidequest_stage(
+            run_id, "critic", candidates_reviewed=len(valid_candidates), accepted=final.accepted,
+            rejection_reason=sidequest_log_reason(final.rejection_reason) if not final.accepted else "",
+        )
     except (AIConfigurationError, AIProviderError) as exc:
+        log_sidequest_stage(run_id, "final", outcome="provider_error", reason=sidequest_log_reason(str(exc)), saved=False)
         raise ai_http_error(exc) from exc
     final_origin_ids = candidate_origin_ids(final)
     if not final.accepted or frozenset(final_origin_ids) not in allowed_origins:
-        raise HTTPException(422, sidequest_rejection_detail(final.rejection_reason))
+        reason = final.rejection_reason or "The critic selected an investigation outside the supplied clue dossiers."
+        log_sidequest_stage(run_id, "final", outcome="critic_rejected", reason=sidequest_log_reason(reason), saved=False)
+        raise HTTPException(422, sidequest_rejection_detail(reason))
+    if reason := sidequest_provenance_rejection(final, allowed_origins, source_registry, concept_names_by_item):
+        log_sidequest_stage(run_id, "final", outcome="final_provenance_rejected", reason=sidequest_log_reason(reason), saved=False)
+        raise HTTPException(422, sidequest_rejection_detail(reason))
     if len(final.bridge.strip()) < 12 or len(final.where_it_breaks.strip()) < 20:
-        raise HTTPException(422, sidequest_rejection_detail("The proposed connection was too broad or did not explain its limitations clearly enough."))
+        reason = "The proposed connection was too broad or did not explain its limitations clearly enough."
+        log_sidequest_stage(run_id, "final", outcome="final_quality_rejected", reason=reason, saved=False)
+        raise HTTPException(422, sidequest_rejection_detail(reason))
     selected_origin = frozenset(final_origin_ids)
-    dedupe_material = "|".join((",".join(str(item_id) for item_id in sorted(selected_origin)), normalize_concept_term(final.bridge), normalize_concept_term(final.connection)))
+    dedupe_material = "|".join((",".join(str(item_id) for item_id in sorted(selected_origin)), normalize_concept_term(final.clue), normalize_concept_term(final.lead), normalize_concept_term(final.bridge), normalize_concept_term(final.connection)))
     dedupe_key = hashlib.sha256(dedupe_material.encode()).hexdigest()
     repeated = db.scalars(select(Sidequest)).all()
-    if any(
-        saved.dedupe_key == dedupe_key or (
-            frozenset(json.loads(saved.origin_item_ids_json or "[]") or (saved.item_a_id, saved.item_b_id)) == selected_origin
-            and normalize_concept_term(saved.bridge) == normalize_concept_term(final.bridge)
-        )
-        for saved in repeated
-    ):
-        raise HTTPException(422, sidequest_rejection_detail("That direction has already been explored for these curiosities."))
+    if any(sidequest_is_duplicate(saved, selected_origin, final.clue, final.lead, final.bridge, final.connection, dedupe_key) for saved in repeated):
+        reason = "That direction has already been explored for these curiosities."
+        log_sidequest_stage(run_id, "final", outcome="duplicate_rejected", reason=reason, saved=False)
+        raise HTTPException(422, sidequest_rejection_detail(reason))
     item_a_id = final_origin_ids[0]
     item_b_id = final_origin_ids[1] if len(final_origin_ids) > 1 else item_a_id
+    supported_source_ids = list(dict.fromkeys(
+        source_id for claim in final.claims if claim.claim_type == "supported_fact" for source_id in claim.source_ids
+    ))
+    evidence_urls = list(dict.fromkeys(str(source_registry[source_id]["url"]) for source_id in supported_source_ids))
+    evidence_status = (
+        "Exploratory · sourced details supported; interpretations and open leads unverified."
+        if supported_source_ids else
+        "Exploratory · interpretation or open hypothesis; not externally verified."
+    )
     sidequest = Sidequest(
         item_a_id=item_a_id, item_b_id=item_b_id, title=final.title.strip(),
         connection=final.connection.strip(), bridge=final.bridge.strip(), why_interesting=final.why_interesting.strip(),
         where_it_breaks=final.where_it_breaks.strip(), new_question=final.new_question.strip(),
-        evidence_status="Exploratory and not externally verified.",
-        concepts_json=json.dumps(final.concepts_used), evidence_json=json.dumps(final.evidence),
+        evidence_status=evidence_status,
+        concepts_json=json.dumps(final.concepts_used), evidence_json=json.dumps(evidence_urls),
         origin_item_ids_json=json.dumps(final_origin_ids), discovery_kind=final.discovery_kind,
         invitation=(final.invitation or final.new_question).strip(), dedupe_key=dedupe_key,
+        detective_version=1,
+        clue_json=json.dumps({
+            "text": final.clue.strip(), "item_id": final.clue_item_id,
+            "concept_names": final.clue_concept_names, "source_ids": final.clue_source_ids,
+        }),
+        lead_json=json.dumps({
+            "text": final.lead.strip(), "kind": final.lead_kind, "category": final.lead_category,
+            "source_ids": final.lead_source_ids,
+        }),
+        reasoning_json=json.dumps(final.reasoning_steps),
+        claims_json=json.dumps([claim.model_dump() for claim in final.claims]),
     )
     db.add(sidequest)
     db.commit()
     db.refresh(sidequest)
+    log_sidequest_stage(
+        run_id, "final", outcome="saved", saved=True, sidequest_id=sidequest.id,
+        origin_count=len(final_origin_ids), supported_fact_sources=len(supported_source_ids),
+    )
     return sidequest_read(sidequest, db)
 
 @app.patch("/api/items/{item_id}", response_model=ItemRead)

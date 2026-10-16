@@ -250,6 +250,13 @@ class ConceptValidationBatch(BaseModel):
     results: list[ValidatedConcept] = Field(max_length=8)
 
 
+class SidequestClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    claim_type: Literal["supported_fact", "interpretation", "speculative_hypothesis"]
+    text: str = Field(min_length=1, max_length=700)
+    source_ids: list[str] = Field(default_factory=list, max_length=4)
+
+
 class ConnectionCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     item_a_id: int
@@ -263,11 +270,22 @@ class ConnectionCandidate(BaseModel):
     origin_item_ids: list[int] = Field(default_factory=list, min_length=1, max_length=4)
     discovery_kind: Literal["new_obsession", "unexpected_connection", "experiment", "new_lens", "creative_impulse"] = "unexpected_connection"
     invitation: str = Field(default="", max_length=300)
+    detective_version: Literal[1] = 1
+    clue: str = Field(default="", max_length=700)
+    clue_item_id: int | None = None
+    clue_concept_names: list[str] = Field(default_factory=list, max_length=4)
+    clue_source_ids: list[str] = Field(default_factory=list, max_length=4)
+    lead: str = Field(default="", max_length=500)
+    lead_kind: Literal["library_item", "unfamiliar_subject"] = "unfamiliar_subject"
+    lead_category: Literal["phenomenon", "practice", "historical_event", "intellectual_problem", "artistic_technique", "library_curiosity"] = "intellectual_problem"
+    lead_source_ids: list[str] = Field(default_factory=list, max_length=4)
+    reasoning_steps: list[str] = Field(default_factory=list, max_length=4)
+    claims: list[SidequestClaim] = Field(default_factory=list, max_length=8)
 
 
 class CandidateBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    candidates: list[ConnectionCandidate] = Field(min_length=1, max_length=6)
+    candidates: list[ConnectionCandidate] = Field(max_length=6)
 
 
 class CritiquedConnection(BaseModel):
@@ -288,6 +306,17 @@ class CritiquedConnection(BaseModel):
     origin_item_ids: list[int] = Field(default_factory=list, min_length=1, max_length=4)
     discovery_kind: Literal["new_obsession", "unexpected_connection", "experiment", "new_lens", "creative_impulse"] = "unexpected_connection"
     invitation: str = Field(default="", max_length=300)
+    detective_version: Literal[1] = 1
+    clue: str = Field(default="", max_length=700)
+    clue_item_id: int | None = None
+    clue_concept_names: list[str] = Field(default_factory=list, max_length=4)
+    clue_source_ids: list[str] = Field(default_factory=list, max_length=4)
+    lead: str = Field(default="", max_length=500)
+    lead_kind: Literal["library_item", "unfamiliar_subject"] = "unfamiliar_subject"
+    lead_category: Literal["phenomenon", "practice", "historical_event", "intellectual_problem", "artistic_technique", "library_curiosity"] = "intellectual_problem"
+    lead_source_ids: list[str] = Field(default_factory=list, max_length=4)
+    reasoning_steps: list[str] = Field(default_factory=list, max_length=4)
+    claims: list[SidequestClaim] = Field(default_factory=list, max_length=8)
 
 
 class OpenRouterClient:
@@ -418,11 +447,11 @@ class OpenRouterClient:
     def resolve_identity(self, item: dict[str, object], synthesis: str, sources: list[dict[str, str]]) -> EntityResolution:
         return self._structured(IDENTITY_SYSTEM_PROMPT, identity_input(item, synthesis, sources), EntityResolution, "entity_resolution", 1400)  # type: ignore[return-value]
 
-    def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
-        return self._structured(CONNECTION_SYSTEM_PROMPT, connection_input(pairs), CandidateBatch, "sidequest_candidates", 2200)  # type: ignore[return-value]
+    def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+        return self._structured(CONNECTION_SYSTEM_PROMPT, connection_input(contexts), CandidateBatch, "sidequest_candidates", 2200)  # type: ignore[return-value]
 
-    def critique_candidates(self, candidates: list[dict[str, object]]) -> CritiquedConnection:
-        return self._structured(CRITIQUE_SYSTEM_PROMPT, critique_input(candidates), CritiquedConnection, "sidequest_critique", 1400)  # type: ignore[return-value]
+    def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+        return self._structured(CRITIQUE_SYSTEM_PROMPT, critique_input(candidates, dossiers), CritiquedConnection, "sidequest_critique", 1400)  # type: ignore[return-value]
 
     def analyze_research(self, item: dict[str, object], synthesis: str, sources: list[dict[str, str]]) -> EnrichmentAnalysis:
         return self._structured(ENRICHMENT_SYSTEM_PROMPT, enrichment_input(item, synthesis, sources), EnrichmentAnalysis, "research_enrichment", 2200)  # type: ignore[return-value]

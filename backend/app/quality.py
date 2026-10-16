@@ -14,6 +14,11 @@ GENERIC_PATTERNS = (
 
 def deterministic_rejection_reason(candidate: ConnectionCandidate) -> str | None:
     combined = f"{candidate.title} {candidate.connection} {candidate.bridge}".lower()
+    if re.search(
+        r"\b(?:relies|rests|depends|is based) on (?:an? )?(?:merely |mostly |only )?(?:abstract|thematic|surface|broad) (?:parallel|similarity|connection|theme)",
+        candidate.where_it_breaks.casefold(),
+    ):
+        return "The candidate's own limitation says the connection is only an abstract or thematic parallel."
     if any(re.search(pattern, combined) for pattern in GENERIC_PATTERNS):
         return "The candidate relies on a broad shared topic or format comparison."
     if len(candidate.bridge.strip()) < 24:
@@ -23,7 +28,92 @@ def deterministic_rejection_reason(candidate: ConnectionCandidate) -> str | None
     return None
 
 
-def research_problem_rejection(problem: ResearchProblem, work_source_ids: set[str], work_title: str) -> str | None:
+ANCHOR_STOP_WORDS = {
+    "about", "after", "against", "also", "and", "are", "because", "before", "between", "character", "characters",
+    "could", "for", "from", "has", "have", "into", "itself", "narrative", "not", "people", "situation", "story",
+    "that", "the", "their", "there", "these", "they", "this", "through", "under", "using", "was", "were", "what",
+    "when", "where", "which", "while", "with", "without", "work", "would",
+}
+
+
+def _anchor_tokens(value: str) -> list[str]:
+    return [token for token in re.sub(r"[^a-z0-9]+", " ", value.casefold()).split() if len(token) >= 3 and token not in ANCHOR_STOP_WORDS]
+
+
+def _grounded_phrases(value: str, source: str) -> set[str]:
+    tokens = _anchor_tokens(value)
+    normalized_source = " ".join(_anchor_tokens(source))
+    return {
+        " ".join(tokens[index:index + size])
+        for size in (2, 3)
+        for index in range(len(tokens) - size + 1)
+        if " ".join(tokens[index:index + size]) in normalized_source
+    }
+
+
+def assess_research_problem(problem: ResearchProblem, work_source_text: dict[str, str] | None = None) -> dict[str, str | bool]:
+    """Evaluate discovery value from existing structured fields and cited excerpts."""
+    if not work_source_text:
+        return {
+            "assessed": False,
+            "specificity": problem.discovery_quality.specificity,
+            "insight": problem.discovery_quality.intellectual_substance,
+            "curiosity_potential": problem.discovery_quality.surprise_potential,
+            "rationale": problem.discovery_quality.rationale,
+        }
+
+    anchor_detail = " ".join((problem.concrete_description, problem.work_situation, problem.mechanism))
+    cited_sources = [work_source_text[source_id] for source_id in problem.evidence_source_ids if work_source_text.get(source_id)]
+    grounded_phrases: set[str] = set()
+    grounded_markers: set[str] = set()
+    for source in cited_sources:
+        grounded_phrases.update(_grounded_phrases(anchor_detail, source))
+        source_normalized = re.sub(r"[^a-z0-9]+", " ", source.casefold())
+        for marker in re.findall(r"\b(?:[A-Z][A-Za-z0-9'-]{2,}|\d+(?:\.\d+)?)\b", anchor_detail):
+            if marker.casefold() not in ANCHOR_STOP_WORDS and re.search(rf"\b{re.escape(marker.casefold())}\b", source_normalized):
+                grounded_markers.add(marker.casefold())
+
+    assessed = bool(cited_sources)
+    if len(grounded_phrases) >= 3 or (grounded_phrases and len(grounded_markers) >= 2):
+        specificity = "high"
+    elif grounded_phrases or grounded_markers:
+        specificity = "medium"
+    else:
+        specificity = "low"
+
+    mechanism_tokens = set(_anchor_tokens(problem.mechanism or problem.interesting_reason))
+    situation_tokens = set(_anchor_tokens(f"{problem.concrete_description} {problem.work_situation}"))
+    relational_move = bool(re.search(
+        r"\b(?:allows?|causes?|changes?|creates?|forces?|makes?|preserves?|reveals?|turns?|through|so that|rather than|by)\b",
+        problem.mechanism or problem.interesting_reason, re.I,
+    ))
+    if specificity == "high" and relational_move and len(mechanism_tokens & situation_tokens) >= 2:
+        insight = "high"
+    elif relational_move and mechanism_tokens & situation_tokens:
+        insight = "medium"
+    else:
+        insight = "low"
+
+    invitation_tokens = set(_anchor_tokens(problem.curiosity_invitation or problem.intellectual_question))
+    grounded_detail_tokens = set().union(*(_anchor_tokens(phrase) for phrase in grounded_phrases)) if grounded_phrases else set()
+    invitation_grounding = invitation_tokens & (mechanism_tokens | situation_tokens)
+    invitation_specificity = invitation_tokens & (grounded_detail_tokens | grounded_markers)
+    if len(invitation_specificity) >= 2 and len(invitation_grounding) >= 3 and problem.discovery_quality.surprise_potential == "high":
+        curiosity = "high"
+    elif invitation_specificity and len(invitation_grounding) >= 2 and problem.discovery_quality.surprise_potential != "low":
+        curiosity = "medium"
+    else:
+        curiosity = "low"
+
+    detail_summary = sorted(grounded_markers)[:3] + sorted(grounded_phrases, key=lambda phrase: (-len(phrase.split()), phrase))[:3]
+    return {
+        "assessed": assessed, "specificity": specificity, "insight": insight,
+        "curiosity_potential": curiosity,
+        "rationale": f"Cited work evidence traces: {', '.join(detail_summary) if detail_summary else 'no distinctive detail' }.",
+    }
+
+
+def research_problem_rejection(problem: ResearchProblem, work_source_ids: set[str], work_title: str, work_source_text: dict[str, str] | None = None) -> str | None:
     cited_ids = set(problem.evidence_source_ids)
     if not cited_ids or not cited_ids <= work_source_ids:
         return "The research problem cites evidence that is not present in the retrieved work corpus."
@@ -49,6 +139,14 @@ def research_problem_rejection(problem: ResearchProblem, work_source_ids: set[st
         normalized_query = re.sub(r"[^a-z0-9]+", " ", query.casefold()).strip()
         if normalized_title and normalized_title in normalized_query:
             return "The research query is anchored to the work title instead of describing the intellectual problem independently."
+    quality = assess_research_problem(problem, work_source_text)
+    if quality["assessed"] and quality["specificity"] == "low":
+        return "The observation is grounded only at a broad-topic level; its concrete detail is not traceable to the cited work excerpts."
+    if quality["assessed"] and (
+        (quality["specificity"] != "high" and quality["insight"] != "high" and quality["curiosity_potential"] != "high")
+        or (quality["insight"] == "low" and quality["curiosity_potential"] == "low")
+    ):
+        return "The observation is grounded but does not yet turn a distinctive work detail into a specific insight or curiosity-opening question."
     return None
 
 

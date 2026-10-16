@@ -127,6 +127,16 @@ describe('discovery card hierarchy', () => {
 })
 
 describe('Sidequest preparation', () => {
+  it('shows a no-case outcome without pretending a Sidequest was created', () => {
+    const item = { id: 1, kind: 'book' as const, title: 'A Psalm for the Wild-Built', note: null, url: null, creator: null, release_year: null, work_scope: 'individual' as const, parent_work_title: null, canonical_identity_id: null, progress_status: 'finished' as const, progress_current: null, progress_total: null, progress_unit: 'book' as const, spoiler_policy: 'full' as const, created_at: new Date().toISOString() }
+    render(<SidequestsView items={[item]} conceptCounts={{ 1: 1 }} sidequests={[]} invitations={[]} busy={false} outcome="Asterisk investigated the available leads but did not save a Sidequest. The critic found only a thematic parallel. No compelling case yet. Try another concrete clue." onExplore={() => undefined} onSurprise={() => undefined} />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('No compelling case yet.')
+    expect(screen.getByRole('status')).toHaveTextContent('The critic found only a thematic parallel.')
+    expect(screen.getByRole('status')).toHaveTextContent('Try another concrete clue.')
+    expect(screen.queryByText(/new Sidequest sparked/i)).not.toBeInTheDocument()
+  })
+
   it('shows saved questions as invitations rather than completed investigations', () => {
     const base = { note: null, url: null, creator: null, release_year: null, work_scope: 'individual' as const, parent_work_title: null, canonical_identity_id: null, progress_status: 'finished' as const, progress_current: null, progress_total: null, progress_unit: 'book' as const, spoiler_policy: 'full' as const, created_at: new Date().toISOString() }
     const items = [{ ...base, id: 1, kind: 'book' as const, title: 'First' }, { ...base, id: 2, kind: 'book' as const, title: 'Second' }]
@@ -148,8 +158,44 @@ describe('Sidequest preparation', () => {
     render(<SidequestsView items={[item]} conceptCounts={{ 1: 1 }} sidequests={[sidequest]} invitations={[]} busy={false} onExplore={() => undefined} onSurprise={() => undefined} />)
 
     expect(screen.getByText('Trace where uncertainty changed your route.')).toBeInTheDocument()
+    expect(screen.getByText('The unexpected connection')).toBeInTheDocument()
+    expect(screen.queryByText('DETECTIVE MODE', { exact: false })).not.toBeInTheDocument()
     expect(screen.getAllByText(item.title)).toHaveLength(2)
     expect(screen.queryByText('✦', { selector: '.connected-items b' })).not.toBeInTheDocument()
+  })
+
+  it('renders Detective Mode as a readable case file with distinct claim states', () => {
+    const created = new Date().toISOString()
+    const item = { id: 1, kind: 'book' as const, title: 'Piranesi', note: null, url: null, creator: null, release_year: null, work_scope: 'individual' as const, parent_work_title: null, canonical_identity_id: null, progress_status: 'finished' as const, progress_current: null, progress_total: null, progress_unit: 'book' as const, spoiler_policy: 'full' as const, created_at: created }
+    const sidequest = {
+      id: 9, item_a_id: 1, item_b_id: 1, item_a_title: item.title, item_b_title: item.title,
+      title: 'The map that remembers uncertainty', connection: 'External memory can make unstable patterns navigable.',
+      bridge: 'External memory for vanishing patterns', why_interesting: 'A survival record becomes a map of possibility.',
+      where_it_breaks: 'Tides recur independently, while hesitation is subjective.', new_question: 'What should a map remember besides movement?',
+      evidence_status: 'Exploratory · sourced details supported; interpretations and open leads unverified.',
+      concepts_used: ['Tides as external memory'], evidence: ['https://example.com/piranesi'], origin_item_ids: [1], origin_titles: [item.title],
+      discovery_kind: 'new_lens', invitation: 'Look for the moment a possibility disappears.', detective_version: 1,
+      clue: { text: "Piranesi's tidal journals make recurring floods navigable.", item_id: 1, concept_names: ['Tides as external memory'], source_ids: ['source-1'] },
+      lead: { text: 'Counterfactual cartography could preserve paths not taken.', kind: 'unfamiliar_subject' as const, category: 'artistic_technique' as const, source_ids: [] },
+      reasoning_steps: ['The journal records recurrence outside memory.', 'A hesitation map could preserve a choice before it disappears.'],
+      claims: [
+        { claim_type: 'supported_fact' as const, text: 'The journals record recurring tides.', source_ids: ['source-1'] },
+        { claim_type: 'interpretation' as const, text: 'The journal acts as external memory.', source_ids: [] },
+        { claim_type: 'speculative_hypothesis' as const, text: 'Maps might preserve unrealized decisions.', source_ids: [] },
+      ], created_at: created,
+    }
+
+    render(<SidequestsView items={[item]} conceptCounts={{ 1: 1 }} sidequests={[sidequest]} invitations={[]} busy={false} onExplore={() => undefined} onSurprise={() => undefined} />)
+
+    expect(screen.getByText(/DETECTIVE MODE/)).toBeInTheDocument()
+    expect(screen.getByText('The clue')).toBeInTheDocument()
+    expect(screen.getByText('The unexpected lead')).toBeInTheDocument()
+    expect(screen.getByText(/artistic technique · Open lead/)).toBeInTheDocument()
+    expect(screen.getByText('How the trail connects')).toBeInTheDocument()
+    expect(screen.getByText('What’s supported')).toBeInTheDocument()
+    expect(screen.getByText('Asterisk’s interpretation')).toBeInTheDocument()
+    expect(screen.getByText('The hunch')).toBeInTheDocument()
+    expect(screen.getByText('Next investigation')).toBeInTheDocument()
   })
 })
 

@@ -6,9 +6,9 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ValidatedConcept, WorkUnderstanding, strict_json_schema
+from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, SidequestClaim, ValidatedConcept, WorkUnderstanding, strict_json_schema
 from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, ItemConcept, app, concepts_are_semantic_duplicates, deduplicate_concept_candidates, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
-from app.quality import candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
+from app.quality import assess_research_problem, candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from app.research import ResearchPacket, RetrievedSource, get_research_provider
 
 
@@ -175,22 +175,39 @@ class FakeAI:
             source_ids=[sources[0]["source_id"]],
         )])
 
-    def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
-        a = pairs[0]["item_a"]["id"]  # type: ignore[index]
-        b = pairs[0]["item_b"]["id"]  # type: ignore[index]
+    def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+        context = contexts[0]
+        clue_item = context["item_a"]
+        possible_leads = context.get("possible_library_leads", [])
+        library_lead = possible_leads[0] if possible_leads else None
+        a = clue_item["id"]  # type: ignore[index]
+        b = library_lead["id"] if library_lead is not None else a  # type: ignore[index]
+        a_concept = clue_item["concepts"][0]["name"]  # type: ignore[index]
+        b_concept = library_lead["concepts"][0]["name"] if library_lead is not None else "collective coordination"  # type: ignore[index]
+        origins = [a, b] if library_lead is not None else [a]
         return CandidateBatch(candidates=[ConnectionCandidate(
             item_a_id=a, item_b_id=b, title="Coordination without a conductor",
             connection="Local agents acting on incomplete signals can produce organized collective behavior without global oversight.",
             bridge="Decentralized coordination under incomplete information", why_interesting="It reframes control as an emergent property.",
             where_it_breaks="The biological system adapts through evolution while the engineered system follows designed rules.",
             new_question="When does local coordination become resilient rather than chaotic?",
+            origin_item_ids=origins, clue=f"{a_concept} begins with local actors responding to incomplete signals.",
+            clue_item_id=a, clue_concept_names=[a_concept], lead=f"Follow that local coordination toward {b_concept}.",
+            lead_kind="library_item" if library_lead is not None else "unfamiliar_subject",
+            lead_category="library_curiosity" if library_lead is not None else "intellectual_problem", reasoning_steps=[
+                "The first clue replaces central control with local responses to partial information.",
+                "The second curiosity asks whether those local responses can still produce coordinated behavior.",
+            ], claims=[
+                SidequestClaim(claim_type="interpretation", text="The shared mechanism may be coordination without global oversight."),
+                SidequestClaim(claim_type="speculative_hypothesis", text="The comparison may reveal when decentralization becomes resilient."),
+            ],
         )])
 
-    def critique_candidates(self, candidates: list[dict[str, object]]) -> CritiquedConnection:
+    def critique_candidates(self, candidates: list[dict[str, object]], _dossiers: list[dict[str, object]]) -> CritiquedConnection:
         candidate = candidates[0]
         return CritiquedConnection(
             accepted=not self.reject, rejection_reason="Too superficial" if self.reject else "",
-            **candidate, evidence_status="Exploratory and not externally verified.", concepts_used=["Decentralized coordination"], evidence=[],
+            **candidate, evidence_status="Exploratory and not externally verified.", concepts_used=candidate["clue_concept_names"], evidence=[],
         )
 
     def analyze_research(self, _item: dict[str, object], _synthesis: str, sources: list[dict[str, str]]) -> EnrichmentAnalysis:
@@ -208,7 +225,7 @@ class FakeAI:
         return WorkUnderstanding(ambiguous_identity=False, confirmation_question="", resolved_title=str(item["title"]), creator="Test creator", release_info="2021", identity_summary="A researched work.", events_and_problems=["A community changes its institutions."], phenomena_and_processes=["Coordination under constraints."], dilemmas_and_decisions=["Actors choose without complete information."], systems_and_causal_relations=["Local choices alter collective outcomes."])
 
     def identify_research_problems(self, _understanding: WorkUnderstanding, work_sources: list[dict[str, str]], _curiosity_profile: dict[str, object] | None = None) -> ResearchProblemBatch:
-        return ResearchProblemBatch(problems=[ResearchProblem(problem_id="problem-1", concrete_description="A community changes its institutional rules.", work_situation="The work compares changing social arrangements.", intellectual_question="How do communities test alternative institutional forms?", relevant_domains=["political anthropology"], evidence_source_ids=[work_sources[0]["source_id"]], research_queries=["established term institutional forms testing collective rules"], anchor_kind="system", concise_label="Testing social arrangements", interesting_reason="The work treats political organization as something communities can deliberately vary rather than a fixed evolutionary stage.", distinctiveness="The comparison centers concrete institutional experiments instead of a generic theme of social change.", discovery_mode="deepen_fascination", external_research_warranted=True, discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "medium", "rationale": "A concrete institutional mechanism with cross-domain potential."})])
+        return ResearchProblemBatch(problems=[ResearchProblem(problem_id="problem-1", concrete_description="A community changes its institutional rules.", work_situation="The work compares changing social arrangements.", intellectual_question="How do communities test alternative institutional forms?", relevant_domains=["political anthropology"], evidence_source_ids=[work_sources[0]["source_id"]], research_queries=["established term institutional forms testing collective rules"], anchor_kind="system", concise_label="Testing social arrangements", interesting_reason="The work treats political organization as something communities can deliberately vary rather than a fixed evolutionary stage.", distinctiveness="The comparison centers concrete institutional experiments instead of a generic theme of social change.", discovery_mode="deepen_fascination", external_research_warranted=True, discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "medium", "rationale": "A concrete institutional mechanism with cross-domain potential."}, mechanism="Changing social arrangements changes institutional rules, incentives, and collective behavior.", curiosity_invitation="When does changing an institutional rule reveal who benefited from the previous social arrangement?")])
 
     def extract_evidence_concepts(self, problems: ResearchProblemBatch, _concept_synthesis: str, concept_sources: list[dict[str, str]]) -> EvidenceConceptBatch:
         return EvidenceConceptBatch(candidates=[EvidenceConceptCandidate(candidate_id="candidate-1", problem_ids=[problems.problems[0].problem_id], discovery_origin="work_grounded", discovery_source_ids=[concept_sources[0]["source_id"]], research_path="Research into how communities test alternate rules led to an independent account of institutional experimentation.", label_kind="established_term", canonical_name="Institutional experimentation", aliases=["institutional experiments"], definition="Deliberate or emergent testing of institutional forms.", domain="political anthropology", mechanism="Rules change incentives and collective behavior.", concept_evidence=[EvidenceReference(source_id=concept_sources[0]["source_id"], excerpt="Institutional experimentation tests alternate rules and arrangements in collective life.")], curiosity_hook="When do changes in collective rules become durable institutional experiments?", uncertainty="The term is used differently across disciplines.")], insufficient_evidence_reasons=[])
@@ -220,7 +237,10 @@ class FakeAI:
 
 class FakeResearch:
     def research(self, _item: dict[str, object]) -> ResearchPacket:
-        source = RetrievedSource(url="https://example.com/publisher", title="Publisher description", excerpt="A sourced description.")
+        source = RetrievedSource(
+            url="https://example.com/publisher", title="Publisher description",
+            excerpt="A community changes its institutional rules. The work compares changing social arrangements and shows how rules alter incentives and collective behavior.",
+        )
         return ResearchPacket(synthesis="The publisher identifies the work and its scope.", sources=[source, source])
 
     def research_problems(self, _item: dict[str, object], _problems: list[dict[str, object]]) -> ResearchPacket:
@@ -556,7 +576,7 @@ def test_sidequest_generation_and_persistence(client: TestClient) -> None:
     app.dependency_overrides[get_ai_client] = lambda: FakeAI()
     created = client.post("/api/sidequests/surprise")
     assert created.status_code == 201
-    assert created.json()["evidence_status"] == "Exploratory and not externally verified."
+    assert created.json()["evidence_status"].startswith("Exploratory")
     assert client.get("/api/sidequests").json() == [created.json()]
 
 
@@ -573,13 +593,13 @@ def test_sidequest_allows_two_items_of_the_same_type(client: TestClient) -> None
     assert {created.json()["item_a_id"], created.json()["item_b_id"]} == {first, second}
 
 
-def test_sidequest_can_open_a_deduplicated_direction_from_one_random_thought(client: TestClient) -> None:
+def test_sidequest_can_open_a_deduplicated_direction_from_one_random_thought(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     thought_id = create_item(client, kind="thought", title="What if maps remembered where we hesitated?").json()["id"]
     client.post(f"/api/items/{thought_id}/concepts", json={"name": "Hesitation as spatial data", "category": "mechanism"})
 
     class SingleDirectionAI(FakeAI):
         def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
-            single = next(context for context in contexts if context["mode"] == "single_item_direction")
+            single = next(context for context in contexts if context["mode"] == "clue_investigation")
             item_id = single["item_a"]["id"]  # type: ignore[index]
             return CandidateBatch(candidates=[ConnectionCandidate(
                 item_a_id=item_id, item_b_id=item_id, origin_item_ids=[item_id],
@@ -589,10 +609,21 @@ def test_sidequest_can_open_a_deduplicated_direction_from_one_random_thought(cli
                 bridge="Spatial traces of unrealized decisions", why_interesting="It treats uncertainty as information rather than noise.",
                 where_it_breaks="A pause can reflect distraction, access barriers, or sensor error rather than meaningful uncertainty.",
                 new_question="What would a map reveal if it preserved abandoned routes as carefully as completed ones?",
+                clue="The thought asks what changes when a map records hesitation instead of only completed movement.",
+                clue_item_id=item_id, clue_concept_names=["Hesitation as spatial data"],
+                lead="Counterfactual cartography: mapping routes that were considered but not taken.",
+                lead_kind="unfamiliar_subject", lead_category="artistic_technique", reasoning_steps=[
+                    "A hesitation marks a moment when more than one route still felt possible.",
+                    "Preserving those moments turns a route record into a map of unrealized decisions.",
+                ], claims=[
+                    SidequestClaim(claim_type="interpretation", text="Hesitation can be treated as information rather than discarded as noise."),
+                    SidequestClaim(claim_type="speculative_hypothesis", text="A counterfactual map might reveal how uncertainty shaped a journey."),
+                ],
             )])
 
     app.dependency_overrides[get_ai_client] = lambda: SingleDirectionAI()
-    created = client.post("/api/sidequests/surprise")
+    with caplog.at_level("INFO", logger="app.main"):
+        created = client.post("/api/sidequests/surprise")
     repeated = client.post("/api/sidequests/surprise")
 
     assert created.status_code == 201
@@ -600,11 +631,240 @@ def test_sidequest_can_open_a_deduplicated_direction_from_one_random_thought(cli
     assert created.json()["origin_titles"] == ["What if maps remembered where we hesitated?"]
     assert created.json()["discovery_kind"] == "creative_impulse"
     assert created.json()["invitation"] == "Trace the places where uncertainty changed your route."
+    assert created.json()["detective_version"] == 1
+    assert created.json()["lead"]["kind"] == "unfamiliar_subject"
+    assert {claim["claim_type"] for claim in created.json()["claims"]} == {"interpretation", "speculative_hypothesis"}
+    assert created.json()["evidence"] == []
+    assert '"clue_dossiers": 1' in caplog.text
+    assert '"candidate_contexts": 1' in caplog.text
+    assert '"generated_candidates": 1' in caplog.text
+    assert '"sent_to_critic": 1' in caplog.text
+    assert '"outcome": "saved"' in caplog.text
     assert repeated.status_code == 422
     assert "already been explored" in repeated.json()["detail"]
 
 
-def test_sidequest_insufficient_data_and_rejected_candidate(client: TestClient) -> None:
+def test_detective_mode_follows_a_sourced_clue_across_three_curiosity_types(client: TestClient) -> None:
+    anchors = {
+        "Piranesi": [("system", "Tides as external memory", "Piranesi records the House's tides in journals so recurring floods become navigable rather than unknowable.")],
+        "Articles of Interest: Pockets": [("system", "Carrying capacity hidden in clothing", "Pocket dimensions determine which everyday objects a wearer can privately carry while keeping both hands free.")],
+    }
+
+    class DossierResearch(FakeResearch):
+        def research(self, item: dict[str, object]) -> ResearchPacket:
+            detail = anchors[str(item["title"])][0][2]
+            source = RetrievedSource(url=f"https://example.com/{str(item['title']).lower().replace(' ', '-')}", title=f"{item['title']} source", excerpt=detail)
+            return ResearchPacket(synthesis="A source identifies the work and a concrete clue.", sources=[source, source])
+
+        def research_problems(self, _item: dict[str, object], _problems: list[dict[str, object]]) -> ResearchPacket:
+            raise AssertionError("These work-supported clues do not need external research.")
+
+    class DetectiveAI(WorkFirstDiscoveryAI):
+        anchors_by_title = anchors
+        seen_kinds: set[str] = set()
+        last_contexts: list[dict[str, object]] = []
+        critic_received_dossiers = False
+
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            self.last_contexts = contexts
+            self.seen_kinds = {
+                str(item["kind"])
+                for context in contexts
+                for item in (context["item_a"], *context["possible_library_leads"])
+                if item is not None
+            }
+            piranesi_thought = next(
+                context for context in contexts
+                if context["item_a"]["title"] == "Piranesi"
+            )
+            piranesi = piranesi_thought["item_a"]
+            thought = next(item for item in piranesi_thought["possible_library_leads"] if item["title"] == "What if maps remembered where we hesitated?")
+            clue_concept = piranesi["concepts"][0]
+            source_id = clue_concept["sources"][0]["source_id"]
+            good = ConnectionCandidate(
+                item_a_id=piranesi["id"], item_b_id=thought["id"], origin_item_ids=[piranesi["id"], thought["id"]],
+                title="The map that remembers uncertainty", clue="Piranesi's tidal journals turn recurring floods into a navigable external memory.",
+                clue_item_id=piranesi["id"], clue_concept_names=[clue_concept["name"]], clue_source_ids=[source_id],
+                lead="The saved thought suggests counterfactual cartography: maps that preserve moments when another route was still possible.",
+                lead_kind="library_item", lead_category="library_curiosity", reasoning_steps=[
+                    "The tidal journal makes a changing environment legible by recording recurrence outside the mind.",
+                    "A hesitation map could do the same for decisions, preserving the moment before one possible route disappeared.",
+                    "That turns a map from a record of movement into a record of uncertainty.",
+                ], connection="External records may make unstable environments navigable—and might do the same for unstable decisions.",
+                bridge="External memory for patterns that would otherwise vanish", why_interesting="A practical survival record becomes a strange model for remembering paths not taken.",
+                where_it_breaks="Tides recur independently of an observer, while hesitation is subjective and may reflect distraction rather than a meaningful choice.",
+                new_question="What would become visible if maps recorded the instant a route stopped being one possibility among several?",
+                claims=[
+                    SidequestClaim(claim_type="supported_fact", text="Piranesi records recurring tides in journals to navigate the House.", source_ids=[source_id]),
+                    SidequestClaim(claim_type="interpretation", text="The journals function as memory outside the individual mind."),
+                    SidequestClaim(claim_type="speculative_hypothesis", text="A map of hesitation might preserve unrealized decisions as spatial information."),
+                ], invitation="Look for the moment a possibility disappears.", discovery_kind="new_lens",
+            )
+            podcast = next(context for context in contexts if context["item_a"]["title"] == "Articles of Interest: Pockets")
+            podcast_lead = podcast["possible_library_leads"][0]
+            generic = ConnectionCandidate(
+                item_a_id=podcast["item_a"]["id"], item_b_id=podcast_lead["id"], origin_item_ids=[podcast["item_a"]["id"], podcast_lead["id"]],
+                title="Two stories about design", connection="Both entries explore human nature through design.", bridge="A broad theme of design and humanity",
+                why_interesting="They seem related.", where_it_breaks="Their particular mechanisms and contexts are different enough that this broad comparison explains very little.",
+                new_question="What else is similar?",
+            )
+            return CandidateBatch(candidates=[good, generic])
+
+        def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+            self.critic_received_dossiers = bool(dossiers and dossiers[0].get("item_a"))
+            candidate = candidates[0]
+            return CritiquedConnection(accepted=True, rejection_reason="", **candidate, evidence_status="Exploratory.", concepts_used=candidate["clue_concept_names"], evidence=[])
+
+    ai = DetectiveAI()
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    app.dependency_overrides[get_research_provider] = lambda: DossierResearch()
+    piranesi = create_item(client, title="Piranesi").json()["id"]
+    pockets = create_item(client, kind="podcast", title="Articles of Interest: Pockets").json()["id"]
+    thought = create_item(client, kind="thought", title="What if maps remembered where we hesitated?").json()["id"]
+    assert client.post(f"/api/items/{piranesi}/enrich").status_code == 200
+    assert client.post(f"/api/items/{pockets}/enrich").status_code == 200
+    assert client.post(f"/api/items/{thought}/concepts", json={"name": "Hesitation as spatial data", "category": "mechanism"}).status_code == 201
+
+    created = client.post("/api/sidequests/surprise")
+
+    assert created.status_code == 201
+    body = created.json()
+    assert ai.seen_kinds == {"book", "podcast", "thought"}
+    assert ai.critic_received_dossiers is True
+    assert body["clue"]["concept_names"] == ["Tides as external memory"]
+    assert body["lead"]["kind"] == "library_item"
+    assert body["lead"]["category"] == "library_curiosity"
+    assert all(context["mode"] == "clue_investigation" and context["item_b"] is None for context in ai.last_contexts)
+    assert len(body["reasoning_steps"]) == 3
+    assert {claim["claim_type"] for claim in body["claims"]} == {"supported_fact", "interpretation", "speculative_hypothesis"}
+    assert body["evidence"] == ["https://example.com/piranesi"]
+    assert "sourced details supported" in body["evidence_status"]
+
+
+def test_detective_mode_rejects_the_psalm_sherlock_abstract_parallel(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    psalm = create_item(client, title="A Psalm for the Wild-Built").json()["id"]
+    sherlock = create_item(client, title="Sherlock Holmes").json()["id"]
+    client.post(f"/api/items/{psalm}/concepts", json={"name": "Ecological restraint as infrastructure", "category": "mechanism"})
+    client.post(f"/api/items/{sherlock}/concepts", json={"name": "Observation as method", "category": "mechanism"})
+
+    class AbstractParallelAI(FakeAI):
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            context = next(entry for entry in contexts if entry["item_a"]["id"] == psalm)
+            lead = next(item for item in context["possible_library_leads"] if item["id"] == sherlock)
+            return CandidateBatch(candidates=[ConnectionCandidate(
+                item_a_id=psalm, item_b_id=lead["id"], origin_item_ids=[psalm, sherlock],
+                title="Exploring the Nature of Independence",
+                clue="Humans adopt a sustainable lifestyle with less dependence on advanced technology.",
+                clue_item_id=psalm, clue_concept_names=["Ecological restraint as infrastructure"],
+                lead="Independence and relationships with technology in A Psalm for the Wild-Built and Sherlock Holmes.",
+                lead_kind="library_item", lead_category="library_curiosity",
+                reasoning_steps=[
+                    "Both works depict social change.",
+                    "One involves self-sufficiency while the other prizes reason and observation.",
+                ],
+                connection="Both narratives consider independence through their characters' relationship to society and technology.",
+                bridge="The broad theme of personal independence", why_interesting="It compares two approaches to autonomy.",
+                where_it_breaks="The connection relies on abstract parallels rather than a shared causal or structural mechanism.",
+                new_question="What ethical dilemmas arise around independence?",
+                claims=[SidequestClaim(claim_type="interpretation", text="Both stories can be read as being about independence.")],
+            )])
+
+        def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+            raise AssertionError("The deterministic gate should reject the self-disqualifying abstract parallel before critique.")
+
+    app.dependency_overrides[get_ai_client] = lambda: AbstractParallelAI()
+    with caplog.at_level("INFO", logger="app.main"):
+        response = client.post("/api/sidequests/surprise")
+
+    assert response.status_code == 422
+    assert "No compelling case yet" in response.json()["detail"]
+    assert "abstract or thematic parallel" in response.json()["detail"]
+    assert '"rejected_candidates": 1' in caplog.text
+    assert '"sent_to_critic": 0' in caplog.text
+    assert "abstract or thematic parallel" in caplog.text
+    assert '"outcome": "all_candidates_rejected"' in caplog.text
+    assert client.get("/api/sidequests").json() == []
+
+
+def test_detective_mode_reports_when_generation_returns_no_candidates(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    item_id = create_item(client, kind="thought", title="A clock that forgets noon").json()["id"]
+    client.post(f"/api/items/{item_id}/concepts", json={"name": "Selective timekeeping", "category": "mechanism"})
+
+    class NoCandidateAI(FakeAI):
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            return CandidateBatch(candidates=[])
+
+        def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+            raise AssertionError("An empty generation result must not invoke the critic.")
+
+    app.dependency_overrides[get_ai_client] = lambda: NoCandidateAI()
+    with caplog.at_level("INFO", logger="app.main"):
+        response = client.post("/api/sidequests/surprise")
+
+    assert response.status_code == 422
+    assert "No compelling case yet" in response.json()["detail"]
+    assert '"generated_candidates": 0' in caplog.text
+    assert '"sent_to_critic": 0' in caplog.text
+    assert '"outcome": "no_generated_candidates"' in caplog.text
+    assert client.get("/api/sidequests").json() == []
+
+
+def test_detective_mode_rejects_an_invalid_evidence_reference(client: TestClient) -> None:
+    first = create_item(client, title="First clue").json()["id"]
+    second = create_item(client, kind="thought", title="Second clue").json()["id"]
+    client.post(f"/api/items/{first}/concepts", json={"name": "Observed pattern", "category": "mechanism"})
+    client.post(f"/api/items/{second}/concepts", json={"name": "Possible lead", "category": "personal"})
+
+    class FabricatedSourceAI(FakeAI):
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            candidate = super().generate_candidates(contexts).candidates[0]
+            return CandidateBatch(candidates=[candidate.model_copy(update={
+                "clue_source_ids": ["source-fabricated"],
+                "claims": [SidequestClaim(claim_type="supported_fact", text="A fabricated source proves the lead.", source_ids=["source-fabricated"])],
+            })])
+
+    app.dependency_overrides[get_ai_client] = lambda: FabricatedSourceAI()
+    response = client.post("/api/sidequests/surprise")
+
+    assert response.status_code == 422
+    assert "not supplied" in response.json()["detail"]
+
+
+def test_detective_mode_suppresses_a_paraphrased_investigation(client: TestClient) -> None:
+    thought_id = create_item(client, kind="thought", title="What if maps remembered where we hesitated?").json()["id"]
+    client.post(f"/api/items/{thought_id}/concepts", json={"name": "Hesitation as spatial data", "category": "mechanism"})
+
+    class ParaphraseAI(FakeAI):
+        run = 0
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            self.run += 1
+            item = contexts[0]["item_a"]
+            if self.run == 1:
+                clue = "A map records moments of hesitation as spatial traces of unrealized choices."
+                lead = "Counterfactual cartography preserves routes that were considered but never taken."
+                connection = "Hesitation traces can preserve unrealized choices and routes that were never taken."
+            else:
+                clue = "Moments of hesitation become spatial traces on a map of unrealized choices."
+                lead = "Counterfactual cartography records considered routes that a traveler never took."
+                connection = "Spatial hesitation traces preserve choices and considered routes that remain unrealized."
+            return CandidateBatch(candidates=[ConnectionCandidate(
+                item_a_id=item["id"], item_b_id=item["id"], origin_item_ids=[item["id"]], title="The roads almost taken",
+                clue=clue, clue_item_id=item["id"], clue_concept_names=["Hesitation as spatial data"], lead=lead,
+                lead_kind="unfamiliar_subject", reasoning_steps=["Hesitation marks a still-open choice between routes.", "Recording that mark preserves a route that remained possible but unrealized."],
+                claims=[SidequestClaim(claim_type="interpretation", text="A hesitation trace can represent an unrealized choice."), SidequestClaim(claim_type="speculative_hypothesis", text="Counterfactual maps might preserve routes not taken.")],
+                connection=connection, bridge="Spatial records of unrealized choices and considered routes", why_interesting="It maps possibility rather than only movement.",
+                where_it_breaks="A pause may reflect noise or distraction rather than a meaningful decision between possible routes.", new_question="Which unrealized routes deserve to remain visible?",
+            )])
+
+    ai = ParaphraseAI()
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    assert client.post("/api/sidequests/surprise").status_code == 201
+    repeated = client.post("/api/sidequests/surprise")
+    assert repeated.status_code == 422
+    assert "already been explored" in repeated.json()["detail"]
+
+
+def test_sidequest_insufficient_data_and_rejected_candidate(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     assert client.post("/api/sidequests/surprise").status_code == 422
     first = create_item(client).json()["id"]
     second = create_item(client, kind="question", title="Why do flocks turn together?").json()["id"]
@@ -613,11 +873,16 @@ def test_sidequest_insufficient_data_and_rejected_candidate(client: TestClient) 
     fake = FakeAI()
     fake.reject = True
     app.dependency_overrides[get_ai_client] = lambda: fake
-    rejected = client.post("/api/sidequests/surprise")
+    with caplog.at_level("INFO", logger="app.main"):
+        rejected = client.post("/api/sidequests/surprise")
     assert rejected.status_code == 422
-    assert "none were strong enough" in rejected.json()["detail"]
+    assert "No compelling case yet" in rejected.json()["detail"]
     assert "Too superficial" in rejected.json()["detail"]
-    assert "more specific notes or concepts" in rejected.json()["detail"]
+    assert "more concrete note or discovery" in rejected.json()["detail"]
+    assert '"candidates_reviewed": 1' in caplog.text
+    assert '"accepted": false' in caplog.text
+    assert '"rejection_reason": "Too superficial"' in caplog.text
+    assert '"outcome": "critic_rejected"' in caplog.text
 
 
 def test_llm_response_models_reject_invalid_categories() -> None:
@@ -702,6 +967,14 @@ class WorkFirstDiscoveryAI(FakeAI):
 
 
 class WorkOnlyResearch(FakeResearch):
+    def research(self, item: dict[str, object]) -> ResearchPacket:
+        details = " ".join(detail for _kind, _label, detail in WorkFirstDiscoveryAI.anchors_by_title.get(str(item["title"]), []))
+        source = RetrievedSource(
+            url="https://example.com/publisher", title=f"{item['title']} publisher description",
+            excerpt=details or "The source describes a specific work situation, its participants, constraints, and consequences.",
+        )
+        return ResearchPacket(synthesis="The publisher identifies the exact work and describes its concrete situations.", sources=[source, source])
+
     def research_problems(self, _item: dict[str, object], _problems: list[dict[str, object]]) -> ResearchPacket:
         raise AssertionError("Work-supported observations must not trigger external concept research.")
 
@@ -822,6 +1095,22 @@ def test_anchor_and_research_limits_are_bounded_and_configurable(client: TestCli
             ) for index, kind in enumerate(kinds, 1)])
 
     class TrackingResearch(FakeResearch):
+        def research(self, item: dict[str, object]) -> ResearchPacket:
+            details = " ".join(
+                f"A specific sequence {index} changes how characters coordinate under a clearly described constraint. "
+                f"The retrieved work account describes sequence {index} and its concrete consequences for later choices."
+                for index in range(1, 7)
+            )
+            source = RetrievedSource(
+                url="https://example.com/publisher",
+                title=f"{item['title']} publisher description",
+                excerpt=details,
+            )
+            return ResearchPacket(
+                synthesis="The publisher identifies the work and describes six concrete sequences.",
+                sources=[source, source],
+            )
+
         def research_problems(self, item: dict[str, object], problems: list[dict[str, object]]) -> ResearchPacket:
             captured.extend(problems)
             return super().research_problems(item, problems)
@@ -975,6 +1264,20 @@ def test_love_and_surprise_survive_only_exact_observation_reruns(client: TestCli
         (original[0][0], original[0][1], "A different underlying observation happens to share the old display label but describes unrelated material."),
         *original[1:],
     ]}
+    class ChangedObservationResearch(WorkOnlyResearch):
+        def research(self, item: dict[str, object]) -> ResearchPacket:
+            details = " ".join(detail for _kind, _label, detail in ai.anchors_by_title[str(item["title"])])
+            source = RetrievedSource(
+                url="https://example.com/publisher",
+                title=f"{item['title']} publisher description",
+                excerpt=details,
+            )
+            return ResearchPacket(
+                synthesis="The publisher identifies the exact work and describes its concrete situations.",
+                sources=[source, source],
+            )
+
+    app.dependency_overrides[get_research_provider] = lambda: ChangedObservationResearch()
     changed = client.post(f"/api/items/{item_id}/enrich").json()
     unrelated = next(concept for concept in changed["concepts"] if concept["name"] == target["name"])
     assert unrelated["loved"] is False and unrelated["surprised"] is False
@@ -1249,7 +1552,7 @@ def test_additive_migration_preserves_ids_and_only_recategorizes_known_tv_titles
     assert p0_defaults == ("unknown", "unknown", "installment", "avoid")
     assert {"work_scope", "parent_work_title", "canonical_identity_id", "progress_status", "progress_current", "progress_total", "progress_unit", "spoiler_policy"} <= p0_columns
     assert {"item_id", "source_concept_id", "source_feedback_key", "question", "status", "user_note"} <= invitation_columns
-    assert {"origin_item_ids_json", "discovery_kind", "invitation", "dedupe_key"} <= sidequest_columns
+    assert {"origin_item_ids_json", "discovery_kind", "invitation", "dedupe_key", "detective_version", "clue_json", "lead_json", "reasoning_json", "claims_json"} <= sidequest_columns
 
     with migration_engine.begin() as connection:
         connection.exec_driver_sql("INSERT INTO curiosity_items (id, kind, title) VALUES (4, 'movie', 'Castle')")
@@ -1330,7 +1633,7 @@ def test_interest_persists_across_quick_extraction_reruns(client: TestClient) ->
     assert current["interest_note"] == "Worth revisiting."
 
 
-def test_interest_prioritizes_sidequest_pairs_without_changing_verification(client: TestClient) -> None:
+def test_interest_prioritizes_sidequest_clues_without_changing_verification(client: TestClient) -> None:
     first = create_item(client, title="First").json()["id"]
     second = create_item(client, title="Second").json()["id"]
     third = create_item(client, title="Third").json()["id"]
@@ -1341,15 +1644,15 @@ def test_interest_prioritizes_sidequest_pairs_without_changing_verification(clie
         assert client.patch(f"/api/concepts/{concept_id}/interest", json={"interested": True}).status_code == 200
 
     class CapturingAI(FakeAI):
-        first_pair: tuple[int, int] | None = None
-        def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
-            self.first_pair = (pairs[0]["item_a"]["id"], pairs[0]["item_b"]["id"])  # type: ignore[index]
-            return super().generate_candidates(pairs)
+        first_clue_id: int | None = None
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            self.first_clue_id = contexts[0]["item_a"]["id"]  # type: ignore[index]
+            return super().generate_candidates(contexts)
 
     ai = CapturingAI()
     app.dependency_overrides[get_ai_client] = lambda: ai
     assert client.post("/api/sidequests/surprise").status_code == 201
-    assert set(ai.first_pair or ()) == {first, second}
+    assert ai.first_clue_id in {first, second}
     concepts = client.get(f"/api/items/{first}/concepts").json()
     assert concepts[0]["concept_verification"] is None
 
@@ -1364,30 +1667,30 @@ def test_love_and_surprise_shape_sidequests_without_overriding_verification_or_e
     assert client.patch(f"/api/concepts/{concept_ids[1]}/feedback", json={"signal": "surprise", "active": True}).status_code == 200
 
     class CapturingAI(FakeAI):
-        pairs: list[tuple[int, int]] = []
+        clue_ids: list[int] = []
 
-        def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
-            self.pairs = [(pair["item_a"]["id"], pair["item_b"]["id"]) for pair in pairs if pair["item_b"] is not None]  # type: ignore[index]
-            return super().generate_candidates(pairs)
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            self.clue_ids = [context["item_a"]["id"] for context in contexts]  # type: ignore[index]
+            return super().generate_candidates(contexts)
 
     ai = CapturingAI()
     app.dependency_overrides[get_ai_client] = lambda: ai
     created = client.post("/api/sidequests/surprise")
 
     assert created.status_code == 201
-    assert item_ids[0] in ai.pairs[0]
-    assert any(set(pair) == {item_ids[2], item_ids[3]} for pair in ai.pairs)
+    assert ai.clue_ids[0] == item_ids[0]
+    assert set(ai.clue_ids) == set(item_ids)
     assert client.get(f"/api/items/{item_ids[0]}/concepts").json()[0]["concept_verification"] is None
-    assert created.json()["evidence_status"] == "Exploratory and not externally verified."
+    assert created.json()["evidence_status"].startswith("Exploratory")
 
 
 def test_saved_invitation_is_bounded_sidequest_context_not_evidence(client: TestClient) -> None:
     class CapturingAI(WorkFirstDiscoveryAI):
-        pairs: list[dict[str, object]] = []
+        contexts: list[dict[str, object]] = []
 
-        def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
-            self.pairs = pairs
-            return super().generate_candidates(pairs)
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            self.contexts = contexts
+            return super().generate_candidates(contexts)
 
     ai = CapturingAI()
     app.dependency_overrides[get_ai_client] = lambda: ai
@@ -1400,12 +1703,12 @@ def test_saved_invitation_is_bounded_sidequest_context_not_evidence(client: Test
     created = client.post("/api/sidequests/surprise")
 
     assert created.status_code == 201
-    assert item_ids[0] in {ai.pairs[0]["item_a"]["id"], ai.pairs[0]["item_b"]["id"]}  # type: ignore[index]
-    concepts = [*ai.pairs[0]["item_a"]["concepts"], *ai.pairs[0]["item_b"]["concepts"]]  # type: ignore[index]
+    assert ai.contexts[0]["item_a"]["id"] == item_ids[0]  # type: ignore[index]
+    concepts = ai.contexts[0]["item_a"]["concepts"]  # type: ignore[index]
     saved_context = next(concept["saved_exploration"] for concept in concepts if concept["name"] == seed["name"])
     assert saved_context["question"] == seed["curiosity_hook"]
     assert created.json()["evidence"] == []
-    assert created.json()["evidence_status"] == "Exploratory and not externally verified."
+    assert created.json()["evidence_status"].startswith("Exploratory")
 
 
 def test_sidequest_rejects_repeated_bridge_and_forces_exploratory_status(client: TestClient) -> None:
@@ -1415,8 +1718,8 @@ def test_sidequest_rejects_repeated_bridge_and_forces_exploratory_status(client:
         client.post(f"/api/items/{item_id}/concepts", json={"name": name, "category": "mechanism"})
 
     class OverclaimingAI(FakeAI):
-        def critique_candidates(self, candidates: list[dict[str, object]]) -> CritiquedConnection:
-            result = super().critique_candidates(candidates)
+        def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+            result = super().critique_candidates(candidates, dossiers)
             return result.model_copy(update={"evidence_status": "Verified scientific relationship."})
 
     app.dependency_overrides[get_ai_client] = lambda: OverclaimingAI()
@@ -1424,7 +1727,7 @@ def test_sidequest_rejects_repeated_bridge_and_forces_exploratory_status(client:
     repeated = client.post("/api/sidequests/surprise")
 
     assert created.status_code == 201
-    assert created.json()["evidence_status"] == "Exploratory and not externally verified."
+    assert created.json()["evidence_status"].startswith("Exploratory")
     assert repeated.status_code == 422
     assert "already been explored" in repeated.json()["detail"]
 
@@ -1455,6 +1758,111 @@ def test_research_problem_requires_work_evidence_and_descriptive_queries() -> No
     assert "work title" in (research_problem_rejection(title_anchored, {"work-1"}, "A Fictional Work") or "")
     generic_invitation = problem.model_copy(update={"curiosity_invitation": "What can we learn from this theme?"})
     assert "generic theme" in (research_problem_rejection(generic_invitation, {"work-1"}, "A Fictional Work") or "")
+
+
+def test_generic_but_grounded_observation_fails_discovery_quality() -> None:
+    source = {"work-1": "The protagonist uses humor in serious situations and jokes during a crisis to cope with stress."}
+    problem = ResearchProblem(
+        problem_id="generic-humor", concise_label="Humor in Crisis", anchor_kind="tone_or_humor",
+        concrete_description="The protagonist uses humor in serious situations and jokes during a crisis.",
+        work_situation="The protagonist uses humor during danger to cope with stress.",
+        mechanism="Humor appears during dangerous events and helps the protagonist cope with stress.",
+        interesting_reason="The humor makes difficult moments more approachable and gives the audience emotional relief.",
+        distinctiveness="The story combines serious danger with humor instead of maintaining a consistently somber tone.",
+        intellectual_question="Why does humor appear during difficult moments?",
+        curiosity_invitation="Why do readers respond to humor during difficult moments?",
+        relevant_domains=["narrative studies"], evidence_source_ids=["work-1"], research_queries=[],
+        external_research_warranted=False,
+        discovery_quality={"specificity": "high", "intellectual_substance": "medium", "surprise_potential": "low", "rationale": "Accurate but broad."},
+    )
+
+    assessment = assess_research_problem(problem, source)
+    assert assessment["specificity"] == "high"  # factual grounding alone is not enough
+    assert assessment["insight"] == "low"
+    assert assessment["curiosity_potential"] == "low"
+    assert "does not yet turn" in (research_problem_rejection(problem, {"work-1"}, "Example", source) or "")
+
+
+def test_weak_anchor_is_dropped_without_failing_enrichment(client: TestClient) -> None:
+    class GenericAnchorAI(FakeAI):
+        def identify_research_problems(self, _understanding: WorkUnderstanding, work_sources: list[dict[str, str]], _curiosity_profile: dict[str, object] | None = None) -> ResearchProblemBatch:
+            return ResearchProblemBatch(problems=[ResearchProblem(
+                problem_id="generic-humor", concise_label="Humor in Crisis", anchor_kind="tone_or_humor",
+                concrete_description="The protagonist uses humor in serious situations and jokes during a crisis.",
+                work_situation="The protagonist uses humor during danger to cope with stress.",
+                mechanism="Humor appears during dangerous events and helps the protagonist cope with stress.",
+                interesting_reason="The humor makes difficult moments more approachable and gives the audience emotional relief.",
+                distinctiveness="The story combines serious danger with humor instead of maintaining a consistently somber tone.",
+                intellectual_question="Why does humor appear during difficult moments?",
+                curiosity_invitation="Why do readers respond to humor during difficult moments?",
+                relevant_domains=["narrative studies"], evidence_source_ids=[work_sources[0]["source_id"]], research_queries=[],
+                external_research_warranted=False,
+                discovery_quality={"specificity": "high", "intellectual_substance": "medium", "surprise_potential": "low", "rationale": "Accurate but broad."},
+            )])
+
+    class GenericWorkResearch(FakeResearch):
+        def research(self, _item: dict[str, object]) -> ResearchPacket:
+            return ResearchPacket(synthesis="A generic but sourced observation.", sources=[RetrievedSource(
+                url="https://example.com/generic-humor", title="Publisher description",
+                excerpt="The protagonist uses humor in serious situations and jokes during a crisis to cope with stress.",
+            )])
+
+    item_id = create_item(client).json()["id"]
+    app.dependency_overrides[get_ai_client] = lambda: GenericAnchorAI()
+    app.dependency_overrides[get_research_provider] = lambda: GenericWorkResearch()
+
+    response = client.post(f"/api/items/{item_id}/enrich")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "researched"
+    assert response.json()["concepts"] == []
+    assert len(response.json()["sources"]) == 1
+
+
+def test_distinctive_nontechnical_insight_passes_anchor_quality() -> None:
+    source = {"work-1": "Mara folds her late mother's red scarf into a paper bird and leaves it on an empty chair before each performance."}
+    problem = ResearchProblem(
+        problem_id="ritual-grief", concise_label="Grief folded into readiness", anchor_kind="motif",
+        concrete_description="Mara folds her late mother's red scarf into a paper bird before each performance.",
+        work_situation="The paper bird remains on an empty chair while Mara performs for the audience.",
+        mechanism="By repeating the private ritual before a public performance, the scarf turns inherited grief into a quiet form of readiness.",
+        interesting_reason="A small tactile ritual lets private grief accompany public creativity without being resolved or explained away.",
+        distinctiveness="The repeated transformation of the red scarf into a paper bird makes absence physically present without dialogue.",
+        intellectual_question="How can a private ritual carry grief into public creative work?",
+        curiosity_invitation="When can a repeated private ritual turn inherited grief into readiness for public performance?",
+        relevant_domains=["ritual studies", "aesthetics"], evidence_source_ids=["work-1"], research_queries=[],
+        external_research_warranted=False, appeal_dimensions=["beautiful", "emotionally_resonant"],
+        discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "medium", "rationale": "A concrete emotional and formal mechanism."},
+    )
+
+    assessment = assess_research_problem(problem, source)
+    assert assessment["specificity"] == "high"
+    assert assessment["insight"] == "high"
+    assert research_problem_rejection(problem, {"work-1"}, "Example", source) is None
+
+
+def test_surprising_connection_between_form_and_coordination_scores_for_curiosity() -> None:
+    source = {"work-1": "Rocky taps prime-number rhythms on the tunnel wall, and Grace answers with matching gestures until the two can coordinate a repair."}
+    problem = ResearchProblem(
+        problem_id="rhythm-coordination", concise_label="Arithmetic becomes choreography", anchor_kind="relationship",
+        concrete_description="Rocky taps prime-number rhythms and Grace answers with matching gestures during the repair.",
+        work_situation="Prime-number rhythms on the tunnel wall become matching gestures that let Rocky and Grace coordinate.",
+        mechanism="By turning prime-number rhythms into matching gestures, the pair changes abstract arithmetic into embodied coordination.",
+        interesting_reason="The interaction makes communication emerge as choreography before either participant shares a spoken language.",
+        distinctiveness="Prime-number rhythms do not merely prove intelligence; they become a tempo for joint physical action.",
+        intellectual_question="When can abstract patterns become tools for embodied cooperation?",
+        curiosity_invitation="When can prime-number rhythms and matching gestures turn arithmetic into embodied coordination?",
+        relevant_domains=["communication", "embodied cognition"], evidence_source_ids=["work-1"], research_queries=[],
+        external_research_warranted=False, appeal_dimensions=["unexpected", "clever"],
+        discovery_quality={"specificity": "high", "intellectual_substance": "high", "surprise_potential": "high", "rationale": "An unexpected bridge from mathematical form to joint action."},
+    )
+
+    assessment = assess_research_problem(problem, source)
+    assert assessment["assessed"] is True
+    assert assessment["specificity"] == "high"
+    assert assessment["insight"] == "high"
+    assert assessment["curiosity_potential"] == "high"
+    assert research_problem_rejection(problem, {"work-1"}, "Example", source) is None
 
 
 def test_personalized_anchor_selection_preserves_an_unfamiliar_direction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1807,9 +2215,9 @@ def test_sidequest_reports_when_all_generated_candidates_are_shallow(client: Tes
         client.post(f"/api/items/{item_id}/concepts", json={"name": "Aliens", "category": "general"})
 
     class ShallowAI(FakeAI):
-        def generate_candidates(self, pairs: list[dict[str, object]]) -> CandidateBatch:
-            a = pairs[0]["item_a"]["id"]  # type: ignore[index]
-            b = pairs[0]["item_b"]["id"]  # type: ignore[index]
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            a = contexts[0]["item_a"]["id"]  # type: ignore[index]
+            b = contexts[0]["possible_library_leads"][0]["id"]  # type: ignore[index]
             return CandidateBatch(candidates=[ConnectionCandidate(
                 item_a_id=a, item_b_id=b, title="Aliens in two stories",
                 connection="Both works explore extraterrestrial intelligence and aliens.",
@@ -1822,5 +2230,5 @@ def test_sidequest_reports_when_all_generated_candidates_are_shallow(client: Tes
     app.dependency_overrides[get_ai_client] = lambda: ShallowAI()
     response = client.post("/api/sidequests/surprise")
     assert response.status_code == 422
-    assert "No compelling connection found" in response.json()["detail"]
+    assert "No compelling case yet" in response.json()["detail"]
     assert "broad shared topic" in response.json()["detail"]

@@ -16,7 +16,8 @@ type FindingSource = { source_id?: string; id?: number; url?: string; title?: st
 type RejectedFinding = { id: number; item_id: number; item_title: string; item_kind: Kind; name: string; stage: 'research_problem' | 'concept_candidate'; proposed_definition: string; motivating_detail: string; proposed_relationship: string; relationship_type: string; rejection_reason: string; discovery_origin: 'work_grounded' | 'research_led' | null; research_path: string | null; research_questions: string[]; initial_validation_outcome: string | null; recovery_attempt: Record<string, unknown>; final_validation_outcome: string | null; automated_evidence_status: 'unverified' | 'partially_supported'; human_review_status: 'pending' | 'kept' | 'dismissed'; human_review_note: string | null; review_history: Record<string, unknown>[]; kept_concept_id: number | null; evidence_review_detail: string | null; last_evaluated_at: string | null; candidate: Record<string, unknown>; validation: Record<string, unknown>; sources: FindingSource[]; superseded_at: string | null; concept_classification: 'established_concept' | 'grounded_interpretation' | 'grounded_observation' | 'speculative_connection' | null; evidence_form: 'quotation' | 'paraphrase' | null; feedback_key: string | null; discovery_mode: 'deepen_fascination' | 'reveal_overlooked_perspective' | null; discovery_quality: DiscoveryQuality; interested: boolean; interest_note: string | null; interested_at: string | null; loved: boolean; love_note: string | null; loved_at: string | null; surprised: boolean; surprise_note: string | null; surprised_at: string | null; created_at: string }
 type IdentityCandidate = { candidate_id: string; title: string; creator: string; release_year: number | null; media_type: Kind; work_scope: WorkScope; parent_work_title: string; canonical_identity_id: string; description: string; confidence: number; source_ids: string[] }
 type Enrichment = { status: 'not_researched' | 'researched' | 'needs_confirmation'; resolved_title: string | null; creator: string | null; release_info: string | null; identity_summary: string | null; confirmation_question: string | null; identity_status: 'unresolved' | 'ambiguous' | 'confirmed' | 'not_applicable'; identity_key: string | null; resolved_media_type: Kind | null; resolved_work_scope: WorkScope | null; parent_work_title: string | null; canonical_identity_id: string | null; identity_confidence: number | null; identity_candidates: IdentityCandidate[]; identity_sources: FindingSource[]; confirmed_at: string | null; researched_at: string | null; sources: ResearchSource[]; concepts: ItemConcept[]; rejected_leads: RejectedFinding[] }
-type Sidequest = { id: number; item_a_id: number; item_b_id: number; item_a_title: string; item_b_title: string; title: string; connection: string; bridge: string; why_interesting: string; where_it_breaks: string; new_question: string; evidence_status: string; concepts_used: string[]; evidence: string[]; origin_item_ids: number[]; origin_titles: string[]; discovery_kind: string; invitation: string; created_at: string }
+type SidequestClaim = { claim_type: 'supported_fact' | 'interpretation' | 'speculative_hypothesis'; text: string; source_ids: string[] }
+type Sidequest = { id: number; item_a_id: number; item_b_id: number; item_a_title: string; item_b_title: string; title: string; connection: string; bridge: string; why_interesting: string; where_it_breaks: string; new_question: string; evidence_status: string; concepts_used: string[]; evidence: string[]; origin_item_ids: number[]; origin_titles: string[]; discovery_kind: string; invitation: string; detective_version?: number; clue?: { text: string; item_id: number; concept_names: string[]; source_ids: string[] } | null; lead?: { text: string; kind: 'library_item' | 'unfamiliar_subject'; category?: string; source_ids: string[] } | null; reasoning_steps?: string[]; claims?: SidequestClaim[]; created_at: string }
 type ExplorationInvitation = { id: number; item_id: number; item_title: string; source_concept_id: number | null; active_concept_id: number | null; source_concept_name: string; question: string; status: 'queued' | 'dismissed'; user_note: string | null; available: boolean; created_at: string; updated_at: string }
 
 const kinds: Kind[] = ['book', 'movie', 'tv_series', 'podcast', 'article', 'concept', 'question', 'thought']
@@ -59,6 +60,7 @@ export function App() {
   const [sidequests, setSidequests] = useState<Sidequest[]>([])
   const [explorationInvitations, setExplorationInvitations] = useState<ExplorationInvitation[]>([])
   const [sidequestBusy, setSidequestBusy] = useState(false)
+  const [sidequestOutcome, setSidequestOutcome] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
@@ -187,6 +189,7 @@ export function App() {
 
   async function surpriseMe() {
     setSidequestBusy(true)
+    setSidequestOutcome('')
     setError('')
     try {
       const response = await fetch('/api/sidequests/surprise', { method: 'POST' })
@@ -196,7 +199,9 @@ export function App() {
       setSuccess('A new Sidequest sparked.')
       window.setTimeout(() => setSuccess(''), 2500)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Sidequest failed')
+      const message = caught instanceof Error ? caught.message : 'Sidequest failed'
+      if (message.includes('No compelling case yet')) setSidequestOutcome(message)
+      else setError(message)
     } finally {
       setSidequestBusy(false)
     }
@@ -341,7 +346,7 @@ export function App() {
     {selectedItem && <div className="concept-callout"><span>✦ Look beneath the surface</span><button type="button" onClick={() => exploreConcepts(selectedItem)}>{conceptCounts[selectedItem.id] > 0 ? 'View Concepts' : 'Explore Concepts'}</button></div>}
     {conceptItem && <ConceptExplorer item={conceptItem} onClose={() => setConceptItem(null)} onError={setError} onChange={count => setConceptCounts(current => ({ ...current, [conceptItem.id]: count }))} onInvitationsChange={refreshExplorationInvitations} />}
 
-    <SidequestsView items={items} conceptCounts={conceptCounts} sidequests={sidequests} invitations={explorationInvitations} busy={sidequestBusy} onExplore={exploreConcepts} onSurprise={() => void surpriseMe()} />
+    <SidequestsView items={items} conceptCounts={conceptCounts} sidequests={sidequests} invitations={explorationInvitations} busy={sidequestBusy} outcome={sidequestOutcome} onExplore={exploreConcepts} onSurprise={() => void surpriseMe()} />
     {error && <div className="error" role="alert">{error}</div>}
     {success && <div className="success" role="status">{success}</div>}
     <footer>Asterisk · v0.2 · Your curiosity belongs to you.</footer>
@@ -750,24 +755,55 @@ export function RejectedFindingCard({ finding, onReview, onReevaluate, onInteres
   </article>
 }
 
-export function SidequestsView({ items, conceptCounts, sidequests, invitations, busy, onExplore, onSurprise }: { items: Item[]; conceptCounts: Record<number, number>; sidequests: Sidequest[]; invitations: ExplorationInvitation[]; busy: boolean; onExplore: (item: Item) => void; onSurprise: () => void }) {
+function SidequestCard({ sidequest }: { sidequest: Sidequest }) {
+  const detective = sidequest.detective_version === 1 && sidequest.clue && sidequest.lead && (sidequest.reasoning_steps?.length || 0) >= 2
+  if (!detective) return <article className="sidequest-card">
+    <div className="evidence-label">✧ {sidequest.discovery_kind.split('_').join(' ')} · {sidequest.evidence_status}</div><h3>{sidequest.title}</h3>{sidequest.invitation && <p className="sidequest-invitation">{sidequest.invitation}</p>}<div className="connected-items">{sidequest.origin_titles.map((title, index) => <React.Fragment key={`${sidequest.id}-${title}-${index}`}>{index > 0 && <b>✦</b>}<span>{title}</span></React.Fragment>)}</div>
+    <div className="sidequest-section"><h4>The unexpected connection</h4><p>{sidequest.connection}</p></div>
+    <div className="sidequest-grid"><div><h4>The bridge</h4><p>{sidequest.bridge}</p></div><div><h4>Why it’s interesting</h4><p>{sidequest.why_interesting}</p></div><div><h4>Where it breaks</h4><p>{sidequest.where_it_breaks}</p></div><div className="new-question"><h4>A new question</h4><p>{sidequest.new_question}</p></div></div>
+    {(sidequest.concepts_used.length > 0 || sidequest.evidence.length > 0) && <details className="sidequest-evidence"><summary>Inspect concepts & evidence</summary>{sidequest.concepts_used.length > 0 && <p><strong>Concepts:</strong> {sidequest.concepts_used.join(' · ')}</p>}{sidequest.evidence.length > 0 && <ul>{sidequest.evidence.map(reference => <li key={reference}><a href={reference} target="_blank" rel="noopener noreferrer">{reference}</a></li>)}</ul>}</details>}
+    <time>{new Date(sidequest.created_at).toLocaleDateString()}</time>
+  </article>
+
+  const claimGroups = {
+    supported_fact: (sidequest.claims || []).filter(claim => claim.claim_type === 'supported_fact'),
+    interpretation: (sidequest.claims || []).filter(claim => claim.claim_type === 'interpretation'),
+    speculative_hypothesis: (sidequest.claims || []).filter(claim => claim.claim_type === 'speculative_hypothesis'),
+  }
+  return <article className="sidequest-card detective-card">
+    <div className="evidence-label">✦ DETECTIVE MODE · {sidequest.evidence_status}</div>
+    <h3>{sidequest.title}</h3>
+    <div className="connected-items">{sidequest.origin_titles.map((title, index) => <React.Fragment key={`${sidequest.id}-${title}-${index}`}>{index > 0 && <b>→</b>}<span>{title}</span></React.Fragment>)}</div>
+    <div className="detective-opening"><div><h4>The clue</h4><p>{sidequest.clue?.text}</p>{sidequest.clue?.concept_names.length ? <small>{sidequest.clue.concept_names.join(' · ')}</small> : null}</div><div><h4>The unexpected lead</h4><p>{sidequest.lead?.text}</p><small>{sidequest.lead?.category?.split('_').join(' ')} · {sidequest.lead?.kind === 'unfamiliar_subject' ? 'Open lead—not yet established' : 'Another library curiosity'}</small></div></div>
+    <div className="reasoning-trail"><h4>How the trail connects</h4><ol>{sidequest.reasoning_steps?.map((step, index) => <li key={`${sidequest.id}-step-${index}`}>{step}</li>)}</ol></div>
+    <div className="claim-files">
+      {claimGroups.supported_fact.length > 0 && <div className="claim-file supported"><h4>What’s supported</h4>{claimGroups.supported_fact.map((claim, index) => <p key={`fact-${index}`}>{claim.text}</p>)}</div>}
+      {claimGroups.interpretation.length > 0 && <div className="claim-file interpretation"><h4>Asterisk’s interpretation</h4>{claimGroups.interpretation.map((claim, index) => <p key={`interpretation-${index}`}>{claim.text}</p>)}</div>}
+      {claimGroups.speculative_hypothesis.length > 0 && <div className="claim-file hypothesis"><h4>The hunch</h4>{claimGroups.speculative_hypothesis.map((claim, index) => <p key={`hypothesis-${index}`}>{claim.text}</p>)}</div>}
+    </div>
+    <div className="detective-ending"><div><h4>Where the trail gets uncertain</h4><p>{sidequest.where_it_breaks}</p></div><div className="new-question"><h4>Next investigation</h4><p>{sidequest.new_question}</p></div></div>
+    {(sidequest.concepts_used.length > 0 || sidequest.evidence.length > 0) && <details className="sidequest-evidence"><summary>Open the evidence envelope</summary>{sidequest.concepts_used.length > 0 && <p><strong>Clues used:</strong> {sidequest.concepts_used.join(' · ')}</p>}{sidequest.evidence.length > 0 && <ul>{sidequest.evidence.map(reference => <li key={reference}><a href={reference} target="_blank" rel="noopener noreferrer">{reference}</a></li>)}</ul>}</details>}
+    <time>{new Date(sidequest.created_at).toLocaleDateString()}</time>
+  </article>
+}
+
+export function SidequestsView({ items, conceptCounts, sidequests, invitations, busy, outcome = '', onExplore, onSurprise }: { items: Item[]; conceptCounts: Record<number, number>; sidequests: Sidequest[]; invitations: ExplorationInvitation[]; busy: boolean; outcome?: string; onExplore: (item: Item) => void; onSurprise: () => void }) {
   const prepared = items.filter(item => (conceptCounts[item.id] || 0) > 0)
   const queued = invitations.filter(invitation => invitation.status === 'queued')
   const ready = prepared.length >= 1
-  return <section className="sidequests" id="sidequests"><div className="sidequest-head"><div><span>03 / DISCOVER</span><h2>Sidequests</h2><p>Unexpected bridges between things that made you curious.</p></div><button className="surprise-button" type="button" disabled={busy || !ready} onClick={onSurprise}>{busy ? '✦ Following a thread…' : ready ? '✦ Discover Sidequests' : 'Prepare two curiosities'}</button></div>
+  const outcomeMarker = 'No compelling case yet.'
+  const markerIndex = outcome.indexOf(outcomeMarker)
+  const outcomeReason = markerIndex >= 0 ? outcome.slice(0, markerIndex).trim() : outcome
+  const outcomeGuidance = markerIndex >= 0 ? outcome.slice(markerIndex + outcomeMarker.length).trim() : ''
+  return <section className="sidequests" id="sidequests"><div className="sidequest-head"><div><span>03 / DISCOVER</span><h2>Sidequests</h2><p>Follow a peculiar clue somewhere unexpected.</p></div><button className="surprise-button" type="button" disabled={busy || !ready} onClick={onSurprise}>{busy ? '✦ Following a thread…' : ready ? '✦ Discover Sidequests' : 'Prepare one curiosity'}</button></div>
+    {outcome && <div className="sidequest-outcome" role="status"><strong>{markerIndex >= 0 ? outcomeMarker : 'The investigation stopped.'}</strong>{outcomeReason && <p>{outcomeReason}</p>}<small>{outcomeGuidance || 'Asterisk left the case open rather than saving a generic connection.'}</small></div>}
     <div className="sidequest-setup">
       <div className="sidequest-explainer"><span>HOW IT WORKS</span><strong>Prepare one or more curiosities.</strong><p>A concept is simply a theme or idea inside an item—not the “Concept” item type. Sidequests can open a direction from one item or connect several, while rejecting generic or forced links.</p></div>
       {queued.length > 0 && <div className="exploration-queue"><div><strong>Questions you want to follow</strong><span>{queued.length} saved {queued.length === 1 ? 'invitation' : 'invitations'}</span></div>{queued.map(invitation => <article className={invitation.available ? '' : 'unavailable'} key={invitation.id}><small>{invitation.item_title} · {invitation.source_concept_name}</small><p>{invitation.question}</p>{!invitation.available && <span>Source discovery is no longer current; preserved for your records.</span>}</article>)}</div>}
       <div className="sidequest-steps" aria-label="Sidequest readiness"><span className={items.length ? 'done' : ''}><b>1</b> Save curiosities</span><span className={ready ? 'done' : ''}><b>2</b> Prepare an item</span><span className={ready ? 'done' : ''}><b>3</b> Discover Sidequests</span></div>
-      {items.length === 0 ? <p className="sidequest-guidance">Save your first curiosity above to begin.</p> : <div className="sidequest-sources"><div className="sidequest-source-head"><strong>Choose curiosities to connect</strong><span>{prepared.length} of {items.length} prepared</span></div><div className="sidequest-source-list">{items.map(item => <article className={(conceptCounts[item.id] || 0) > 0 ? 'prepared' : ''} key={item.id}><span className="source-icon">{icons[item.kind]}</span><div><strong>{item.title}</strong><small>{labels[item.kind]} · {(conceptCounts[item.id] || 0) === 0 ? 'No concepts yet' : `${conceptCounts[item.id]} ${(conceptCounts[item.id] || 0) === 1 ? 'concept' : 'concepts'}`}</small></div><button type="button" onClick={() => onExplore(item)}>{(conceptCounts[item.id] || 0) > 0 ? 'View concepts' : 'Add concepts'}</button></article>)}</div></div>}
+      {items.length === 0 ? <p className="sidequest-guidance">Save your first curiosity above to begin.</p> : <div className="sidequest-sources"><div className="sidequest-source-head"><strong>Possible starting points</strong><span>{prepared.length} of {items.length} prepared</span></div><div className="sidequest-source-list">{items.map(item => <article className={(conceptCounts[item.id] || 0) > 0 ? 'prepared' : ''} key={item.id}><span className="source-icon">{icons[item.kind]}</span><div><strong>{item.title}</strong><small>{labels[item.kind]} · {(conceptCounts[item.id] || 0) === 0 ? 'No concepts yet' : `${conceptCounts[item.id]} ${(conceptCounts[item.id] || 0) === 1 ? 'concept' : 'concepts'}`}</small></div><button type="button" onClick={() => onExplore(item)}>{(conceptCounts[item.id] || 0) > 0 ? 'View concepts' : 'Add concepts'}</button></article>)}</div></div>}
     </div>
-    {sidequests.length === 0 ? <div className="sidequest-empty"><strong>{ready ? 'You’re ready for your first Sidequest.' : 'No Sidequests yet.'}</strong><p>{ready ? 'Asterisk can now open an unexpected direction or find a meaningful connection.' : 'Use the guide above to prepare a curiosity.'}</p></div> : <div className="sidequest-stack">{sidequests.map(sidequest => <article className="sidequest-card" key={sidequest.id}>
-      <div className="evidence-label">✧ {sidequest.discovery_kind.split('_').join(' ')} · {sidequest.evidence_status}</div><h3>{sidequest.title}</h3>{sidequest.invitation && <p className="sidequest-invitation">{sidequest.invitation}</p>}<div className="connected-items">{sidequest.origin_titles.map((title, index) => <React.Fragment key={`${sidequest.id}-${title}-${index}`}>{index > 0 && <b>✦</b>}<span>{title}</span></React.Fragment>)}</div>
-      <div className="sidequest-section"><h4>The unexpected connection</h4><p>{sidequest.connection}</p></div>
-      <div className="sidequest-grid"><div><h4>The bridge</h4><p>{sidequest.bridge}</p></div><div><h4>Why it’s interesting</h4><p>{sidequest.why_interesting}</p></div><div><h4>Where it breaks</h4><p>{sidequest.where_it_breaks}</p></div><div className="new-question"><h4>A new question</h4><p>{sidequest.new_question}</p></div></div>
-      {(sidequest.concepts_used.length > 0 || sidequest.evidence.length > 0) && <details className="sidequest-evidence"><summary>Inspect concepts & evidence</summary>{sidequest.concepts_used.length > 0 && <p><strong>Concepts:</strong> {sidequest.concepts_used.join(' · ')}</p>}{sidequest.evidence.length > 0 && <ul>{sidequest.evidence.map(reference => <li key={reference}><a href={reference} target="_blank" rel="noopener noreferrer">{reference}</a></li>)}</ul>}</details>}
-      <time>{new Date(sidequest.created_at).toLocaleDateString()}</time>
-    </article>)}</div>}
+    {sidequests.length === 0 ? <div className="sidequest-empty"><strong>{ready ? 'You’re ready for your first Sidequest.' : 'No Sidequests yet.'}</strong><p>{ready ? 'Asterisk can now open an unexpected direction or find a meaningful connection.' : 'Use the guide above to prepare a curiosity.'}</p></div> : <div className="sidequest-stack">{sidequests.map(sidequest => <SidequestCard sidequest={sidequest} key={sidequest.id} />)}</div>}
   </section>
 }
 
