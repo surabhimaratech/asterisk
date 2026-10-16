@@ -1,4 +1,6 @@
 from collections.abc import Generator
+from io import StringIO
+import logging
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,8 +8,9 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, SidequestClaim, ValidatedConcept, WorkUnderstanding, strict_json_schema
-from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, ItemConcept, app, concepts_are_semantic_duplicates, deduplicate_concept_candidates, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
+from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, SidequestCandidateAssessment, SidequestClaim, ValidatedConcept, WorkUnderstanding, strict_json_schema
+from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, ItemConcept, app, concepts_are_semantic_duplicates, configure_application_logging, deduplicate_concept_candidates, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
+from app.prompts import CONNECTION_SYSTEM_PROMPT
 from app.quality import assess_research_problem, candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from app.research import ResearchPacket, RetrievedSource, get_research_provider
 
@@ -48,6 +51,26 @@ def test_default_database_path_is_stable() -> None:
     assert DB_PATH == BACKEND_DIR / "data" / "asterisk.db"
     assert DB_PATH.is_absolute()
     assert DATA_DIR.is_dir()
+
+
+def test_application_diagnostics_use_the_server_terminal_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ASTERISK_LOG_LEVEL", raising=False)
+    output = StringIO()
+    handler = logging.StreamHandler(output)
+    server_parent = logging.Logger("test.uvicorn")
+    server_parent.addHandler(handler)
+    server_parent.propagate = False
+    server_logger = logging.Logger("test.uvicorn.error")
+    server_logger.parent = server_parent
+    server_logger.propagate = True
+    target_logger = logging.Logger("test.asterisk")
+
+    configure_application_logging(target_logger, server_logger)
+    target_logger.info('sidequest_diagnostic {"stage": "generation"}')
+
+    assert target_logger.level == logging.INFO
+    assert target_logger.propagate is False
+    assert 'sidequest_diagnostic {"stage": "generation"}' in output.getvalue()
 
 
 def test_work_understanding_strict_schema_is_closed_without_profile_dictionary() -> None:
@@ -178,36 +201,53 @@ class FakeAI:
     def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
         context = contexts[0]
         clue_item = context["item_a"]
-        possible_leads = context.get("possible_library_leads", [])
-        library_lead = possible_leads[0] if possible_leads else None
         a = clue_item["id"]  # type: ignore[index]
-        b = library_lead["id"] if library_lead is not None else a  # type: ignore[index]
         a_concept = clue_item["concepts"][0]["name"]  # type: ignore[index]
-        b_concept = library_lead["concepts"][0]["name"] if library_lead is not None else "collective coordination"  # type: ignore[index]
-        origins = [a, b] if library_lead is not None else [a]
-        return CandidateBatch(candidates=[ConnectionCandidate(
-            item_a_id=a, item_b_id=b, title="Coordination without a conductor",
+        first = ConnectionCandidate(
+            item_a_id=a, item_b_id=a, title="Coordination without a conductor",
             connection="Local agents acting on incomplete signals can produce organized collective behavior without global oversight.",
             bridge="Decentralized coordination under incomplete information", why_interesting="It reframes control as an emergent property.",
             where_it_breaks="The biological system adapts through evolution while the engineered system follows designed rules.",
             new_question="When does local coordination become resilient rather than chaotic?",
-            origin_item_ids=origins, clue=f"{a_concept} begins with local actors responding to incomplete signals.",
-            clue_item_id=a, clue_concept_names=[a_concept], lead=f"Follow that local coordination toward {b_concept}.",
-            lead_kind="library_item" if library_lead is not None else "unfamiliar_subject",
-            lead_category="library_curiosity" if library_lead is not None else "intellectual_problem", reasoning_steps=[
+            origin_item_ids=[a], clue=f"{a_concept} begins with local actors responding to incomplete signals.",
+            clue_item_id=a, clue_concept_names=[a_concept], lead="Distributed cognition under partial information.",
+            lead_kind="unfamiliar_subject", lead_category="intellectual_problem", reasoning_steps=[
                 "The first clue replaces central control with local responses to partial information.",
-                "The second curiosity asks whether those local responses can still produce coordinated behavior.",
+                "Distributed cognition asks how those partial views can still produce coordinated behavior.",
             ], claims=[
                 SidequestClaim(claim_type="interpretation", text="The shared mechanism may be coordination without global oversight."),
                 SidequestClaim(claim_type="speculative_hypothesis", text="The comparison may reveal when decentralization becomes resilient."),
             ],
-        )])
+        )
+        second = ConnectionCandidate(
+            item_a_id=a, item_b_id=a, title="The threshold where a group commits",
+            connection="The clue can open a question about how local signals accumulate until a collective system changes state.",
+            bridge="Threshold aggregation converting local signals into collective commitment",
+            why_interesting="It shifts attention from coordination itself to the moment a scattered pattern becomes a decision.",
+            where_it_breaks="A formal threshold model may not capture evolving goals, unequal influence, or ambiguous signals.",
+            new_question="Which quorum-like systems change behavior only after enough independent local signals agree?",
+            origin_item_ids=[a], clue=f"{a_concept} begins with local actors responding to incomplete signals.",
+            clue_item_id=a, clue_concept_names=[a_concept], lead="Quorum thresholds in collective decision-making.",
+            lead_kind="unfamiliar_subject", lead_category="phenomenon", reasoning_steps=[
+                "Separate actors contribute signals without seeing the whole system.",
+                "A threshold can convert enough local agreement into a collective change of state.",
+            ], claims=[
+                SidequestClaim(claim_type="interpretation", text="The clue can be read as a threshold problem rather than only a coordination problem."),
+                SidequestClaim(claim_type="speculative_hypothesis", text="Quorum-like thresholds may offer a useful external direction."),
+            ],
+        )
+        return CandidateBatch(candidates=[first, second])
 
     def critique_candidates(self, candidates: list[dict[str, object]], _dossiers: list[dict[str, object]]) -> CritiquedConnection:
         candidate = candidates[0]
         return CritiquedConnection(
             accepted=not self.reject, rejection_reason="Too superficial" if self.reject else "",
             **candidate, evidence_status="Exploratory and not externally verified.", concepts_used=candidate["clue_concept_names"], evidence=[],
+            selected_candidate_index=0 if not self.reject else None,
+            candidate_assessments=[SidequestCandidateAssessment(
+                candidate_index=index, external_lead_aligned=True, mechanism_explained=True,
+                next_investigation_follows_lead=True, valid=True, rejection_reason="",
+            ) for index, _candidate in enumerate(candidates)],
         )
 
     def analyze_research(self, _item: dict[str, object], _synthesis: str, sources: list[dict[str, str]]) -> EnrichmentAnalysis:
@@ -586,7 +626,38 @@ def test_sidequest_allows_two_items_of_the_same_type(client: TestClient) -> None
     for item_id, name in [(first, "Fault tolerance"), (second, "Ecological resilience")]:
         client.post(f"/api/items/{item_id}/concepts", json={"name": name, "category": "mechanism"})
 
-    app.dependency_overrides[get_ai_client] = lambda: FakeAI()
+    class SameTypeLibraryWinnerAI(FakeAI):
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            external = super().generate_candidates(contexts).candidates
+            context = contexts[0]
+            clue = context["item_a"]
+            lead = context["possible_library_leads"][0]
+            library = external[0].model_copy(update={
+                "item_a_id": clue["id"], "item_b_id": lead["id"],
+                "origin_item_ids": [clue["id"], lead["id"]],
+                "title": "Failure as a source of resilience",
+                "lead": "The Overstory's ecological resilience as a library connection",
+                "lead_kind": "library_item", "lead_category": "library_curiosity",
+                "connection": "Fault tolerance and ecological resilience both preserve function by distributing recovery across partially independent components.",
+                "bridge": "Distributed recovery through partially independent components",
+                "new_question": "Which forms of redundancy preserve recovery capacity without making every component interchangeable?",
+            })
+            return CandidateBatch(candidates=[*external, library])
+
+        def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+            selected_index = next(index for index, candidate in enumerate(candidates) if candidate["lead_kind"] == "library_item")
+            selected = candidates[selected_index]
+            return CritiquedConnection(
+                accepted=True, rejection_reason="", **selected,
+                evidence_status="Exploratory.", concepts_used=selected["clue_concept_names"], evidence=[],
+                selected_candidate_index=selected_index,
+                candidate_assessments=[SidequestCandidateAssessment(
+                    candidate_index=index, external_lead_aligned=True, mechanism_explained=True,
+                    next_investigation_follows_lead=True, valid=True, rejection_reason="",
+                ) for index, _candidate in enumerate(candidates)],
+            )
+
+    app.dependency_overrides[get_ai_client] = lambda: SameTypeLibraryWinnerAI()
     created = client.post("/api/sidequests/surprise")
 
     assert created.status_code == 201
@@ -601,7 +672,7 @@ def test_sidequest_can_open_a_deduplicated_direction_from_one_random_thought(cli
         def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
             single = next(context for context in contexts if context["mode"] == "clue_investigation")
             item_id = single["item_a"]["id"]  # type: ignore[index]
-            return CandidateBatch(candidates=[ConnectionCandidate(
+            counterfactual = ConnectionCandidate(
                 item_a_id=item_id, item_b_id=item_id, origin_item_ids=[item_id],
                 discovery_kind="creative_impulse", title="A map of almost-chosen paths",
                 invitation="Trace the places where uncertainty changed your route.",
@@ -619,7 +690,20 @@ def test_sidequest_can_open_a_deduplicated_direction_from_one_random_thought(cli
                     SidequestClaim(claim_type="interpretation", text="Hesitation can be treated as information rather than discarded as noise."),
                     SidequestClaim(claim_type="speculative_hypothesis", text="A counterfactual map might reveal how uncertainty shaped a journey."),
                 ],
-            )])
+            )
+            desire_path = counterfactual.model_copy(update={
+                "title": "Where indecision leaves a path",
+                "lead": "Desire paths as records of repeated route disagreement",
+                "lead_category": "phenomenon",
+                "connection": "Hesitation marks could be compared with physical traces that accumulate when intended and preferred routes diverge.",
+                "bridge": "Accumulated route choices making disagreement with a planned path visible",
+                "new_question": "Where do desire paths reveal repeated uncertainty rather than a stable preferred shortcut?",
+                "reasoning_steps": [
+                    "A hesitation records friction between the route offered and the route still being considered.",
+                    "Repeated route friction can accumulate into a visible alternative path through a landscape.",
+                ],
+            })
+            return CandidateBatch(candidates=[counterfactual, desire_path])
 
     app.dependency_overrides[get_ai_client] = lambda: SingleDirectionAI()
     with caplog.at_level("INFO", logger="app.main"):
@@ -637,8 +721,8 @@ def test_sidequest_can_open_a_deduplicated_direction_from_one_random_thought(cli
     assert created.json()["evidence"] == []
     assert '"clue_dossiers": 1' in caplog.text
     assert '"candidate_contexts": 1' in caplog.text
-    assert '"generated_candidates": 1' in caplog.text
-    assert '"sent_to_critic": 1' in caplog.text
+    assert '"generated_candidates": 2' in caplog.text
+    assert '"sent_to_critic": 2' in caplog.text
     assert '"outcome": "saved"' in caplog.text
     assert repeated.status_code == 422
     assert "already been explored" in repeated.json()["detail"]
@@ -708,12 +792,39 @@ def test_detective_mode_follows_a_sourced_clue_across_three_curiosity_types(clie
                 why_interesting="They seem related.", where_it_breaks="Their particular mechanisms and contexts are different enough that this broad comparison explains very little.",
                 new_question="What else is similar?",
             )
-            return CandidateBatch(candidates=[good, generic])
+            external_memory = good.model_copy(update={
+                "item_b_id": piranesi["id"], "origin_item_ids": [piranesi["id"]],
+                "title": "When a notebook becomes part of navigation",
+                "lead": "Cognitive offloading in changing environments", "lead_kind": "unfamiliar_subject",
+                "lead_category": "scientific_mechanism",
+                "connection": "The tidal journal suggests treating an external record as part of the system that perceives and navigates change.",
+                "bridge": "Offloading recurring environmental patterns into an external memory system",
+                "new_question": "Which navigation practices fail when their external records are removed at the moment conditions begin to change?",
+                "claims": [SidequestClaim(claim_type="interpretation", text="The journal can be read as external memory for a changing environment.")],
+            })
+            archive = good.model_copy(update={
+                "item_b_id": piranesi["id"], "origin_item_ids": [piranesi["id"]],
+                "title": "An archive that predicts recurrence",
+                "lead": "Phenological calendars that record recurring environmental events", "lead_kind": "unfamiliar_subject",
+                "lead_category": "practice",
+                "connection": "The tidal journal opens an investigation into records organized around recurrence rather than chronological completeness.",
+                "bridge": "Using repeated observations to anticipate the return of environmental conditions",
+                "new_question": "How do seasonal calendars decide which recurring event is reliable enough to guide a future action?",
+                "claims": [SidequestClaim(claim_type="speculative_hypothesis", text="Recurrence-based environmental calendars may be a useful outside lead for the tidal journals.")],
+            })
+            return CandidateBatch(candidates=[good, external_memory, archive, generic])
 
         def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
             self.critic_received_dossiers = bool(dossiers and dossiers[0].get("item_a"))
             candidate = candidates[0]
-            return CritiquedConnection(accepted=True, rejection_reason="", **candidate, evidence_status="Exploratory.", concepts_used=candidate["clue_concept_names"], evidence=[])
+            return CritiquedConnection(
+                accepted=True, rejection_reason="", **candidate, evidence_status="Exploratory.",
+                concepts_used=candidate["clue_concept_names"], evidence=[], selected_candidate_index=0,
+                candidate_assessments=[SidequestCandidateAssessment(
+                    candidate_index=index, external_lead_aligned=True, mechanism_explained=True,
+                    next_investigation_follows_lead=True, valid=True, rejection_reason="",
+                ) for index, _candidate in enumerate(candidates)],
+            )
 
     ai = DetectiveAI()
     app.dependency_overrides[get_ai_client] = lambda: ai
@@ -786,6 +897,276 @@ def test_detective_mode_rejects_the_psalm_sherlock_abstract_parallel(client: Tes
     assert client.get("/api/sidequests").json() == []
 
 
+def test_detective_mode_compares_outward_leads_before_a_same_author_library_match(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    hail_mary = create_item(client, title="Project Hail Mary", creator="Andy Weir").json()["id"]
+    martian = create_item(client, title="The Martian", creator="Andy Weir").json()["id"]
+    client.post(f"/api/items/{hail_mary}/concepts", json={"name": "Selective breeding for interspecies cooperation", "category": "mechanism"})
+    client.post(f"/api/items/{martian}/concepts", json={"name": "Agriculture under extreme scarcity", "category": "mechanism"})
+
+    class OutwardCompetitionAI(FakeAI):
+        generated_kinds: list[str] = []
+        candidate_kinds: list[str] = []
+        candidate_categories: list[str] = []
+
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            context = next(entry for entry in contexts if entry["item_a"]["id"] == hail_mary)
+            library_lead = next(item for item in context["possible_library_leads"] if item["id"] == martian)
+            assert "creator" not in library_lead
+            common = {
+                "clue": "A constrained breeding program selects Taumoeba that can address the Astrophage threat.",
+                "clue_item_id": hail_mary,
+                "clue_concept_names": ["Selective breeding for interspecies cooperation"],
+            }
+            weak_library = ConnectionCandidate(
+                item_a_id=hail_mary, item_b_id=martian, origin_item_ids=[hail_mary, martian],
+                title="Two survival toolkits", lead="The Martian's agricultural survival methods.",
+                lead_kind="library_item", lead_category="library_curiosity",
+                reasoning_steps=[
+                    "The Taumoeba program changes a living population under survival pressure.",
+                    "The Martian uses cultivation to produce food under a different survival pressure.",
+                ],
+                claims=[SidequestClaim(claim_type="interpretation", text="The two works use different biological interventions as survival tools.")],
+                connection="Both works explore survival through biological problem-solving.",
+                bridge="Intervening in living systems under resource scarcity",
+                why_interesting="It places two survival techniques beside each other.",
+                where_it_breaks="Agricultural cultivation does not establish a mechanism for interspecies cooperation or selective breeding.",
+                new_question="How can biology solve survival problems?", **common,
+            )
+            outward_science = ConnectionCandidate(
+                item_a_id=hail_mary, item_b_id=hail_mary, origin_item_ids=[hail_mary],
+                title="Making evolution choose the less dangerous exit", lead="Evolutionary steering in antimicrobial resistance.",
+                lead_kind="unfamiliar_subject", lead_category="scientific_mechanism",
+                reasoning_steps=[
+                    "The breeding program turns variation across generations into a search through possible traits.",
+                    "Evolutionary steering asks whether the selective environment can make one adaptive route easier than another.",
+                    "The shared mechanism is intervention in the fitness landscape, not merely the use of biology during a crisis.",
+                ],
+                claims=[
+                    SidequestClaim(claim_type="interpretation", text="The fictional breeding sequence can be read as a constrained search through traits."),
+                    SidequestClaim(claim_type="speculative_hypothesis", text="Evolutionary steering may be a useful outside lens for asking which adaptive escape routes an intervention rewards."),
+                ],
+                connection="The clue suggests treating selection pressure itself as the control surface rather than treating adaptation as an obstacle.",
+                bridge="Reshaping a fitness landscape to redirect adaptation",
+                why_interesting="It turns a creature-breeding solution into a question about whether evolution's escape routes can be designed.",
+                where_it_breaks="A fictional breeding program with a known target is much simpler than steering real populations with uncertain mutations and ecological effects.",
+                new_question="Could a treatment make a pathogen's easiest evolutionary escape route also make it less dangerous?", **common,
+            )
+            outward_art = ConnectionCandidate(
+                item_a_id=hail_mary, item_b_id=hail_mary, origin_item_ids=[hail_mary],
+                title="A montage made out of generations", lead="The breeding montage as an artistic technique for making iteration visible.",
+                lead_kind="unfamiliar_subject", lead_category="artistic_technique",
+                reasoning_steps=[
+                    "Each generation makes a hidden process of variation and selection observable through changed outcomes.",
+                    "A montage can compress repeated trials while preserving the causal rhythm of failure, adjustment, and inheritance.",
+                ],
+                claims=[SidequestClaim(claim_type="interpretation", text="The breeding sequence can function as a narrative compression of iterative learning.")],
+                connection="Repeated generations give narrative form to a process whose mechanism would otherwise remain invisible.",
+                bridge="Compressing iterative change while preserving causal steps",
+                why_interesting="The scientific procedure doubles as a storytelling device for making slow change legible.",
+                where_it_breaks="Narrative compression can imply a cleaner path of progress than an actual breeding process would produce.",
+                new_question="How do films and novels compress repeated failure without erasing the moment when the method changes?", **common,
+            )
+            generated = [weak_library, outward_science, outward_art]
+            self.generated_kinds = [candidate.lead_kind for candidate in generated]
+            return CandidateBatch(candidates=generated)
+
+        def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+            self.candidate_kinds = [str(candidate["lead_kind"]) for candidate in candidates]
+            self.candidate_categories = [str(candidate["lead_category"]) for candidate in candidates]
+            selected = next(candidate for candidate in candidates if candidate["lead_category"] == "scientific_mechanism")
+            selected_index = candidates.index(selected)
+            return CritiquedConnection(
+                accepted=True, rejection_reason="", **selected,
+                evidence_status="Exploratory · open hypothesis; not externally verified.",
+                concepts_used=selected["clue_concept_names"], evidence=[],
+                selected_candidate_index=selected_index,
+                candidate_assessments=[SidequestCandidateAssessment(
+                    candidate_index=index, external_lead_aligned=True, mechanism_explained=True,
+                    next_investigation_follows_lead=True, valid=True, rejection_reason="",
+                ) for index, _candidate in enumerate(candidates)],
+            )
+
+    ai = OutwardCompetitionAI()
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    with caplog.at_level("INFO", logger="app.main"):
+        response = client.post("/api/sidequests/surprise")
+
+    assert response.status_code == 201
+    assert ai.generated_kinds.count("unfamiliar_subject") == 2
+    assert ai.generated_kinds.count("library_item") == 1
+    assert ai.candidate_kinds.count("unfamiliar_subject") == 2
+    assert ai.candidate_kinds.count("library_item") == 0
+    assert {"scientific_mechanism", "artistic_technique"} == set(ai.candidate_categories)
+    assert response.json()["origin_item_ids"] == [hail_mary]
+    assert response.json()["lead"]["category"] == "scientific_mechanism"
+    assert "pathogen's easiest evolutionary escape route" in response.json()["new_question"]
+    assert response.json()["evidence"] == []
+    assert "at least two rival" in CONNECTION_SYSTEM_PROMPT
+    assert "at most one library-item candidate" in CONNECTION_SYSTEM_PROMPT
+    assert "author, franchise, genre" in CONNECTION_SYSTEM_PROMPT
+    assert '"generated_candidates": 3' in caplog.text
+    assert '"rejected_candidates": 1' in caplog.text
+    assert '"sent_to_critic": 2' in caplog.text
+    assert "broad shared topic or format comparison" in caplog.text
+
+
+def test_detective_mode_rejects_the_single_laundered_hydroponics_candidate_before_critique(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    hail_mary = create_item(client, title="Project Hail Mary", creator="Andy Weir").json()["id"]
+    client.post(f"/api/items/{hail_mary}/concepts", json={"name": "Selective breeding for interspecies cooperation", "category": "mechanism"})
+
+    class LaunderedHydroponicsAI(FakeAI):
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            return CandidateBatch(candidates=[ConnectionCandidate(
+                item_a_id=hail_mary, item_b_id=hail_mary, origin_item_ids=[hail_mary],
+                title="Growing a way home", clue="Taumoeba are selectively bred to address the Astrophage threat.",
+                clue_item_id=hail_mary, clue_concept_names=["Selective breeding for interspecies cooperation"],
+                lead="Hydroponic Farming in Space", lead_kind="unfamiliar_subject", lead_category="scientific_mechanism",
+                reasoning_steps=[
+                    "Project Hail Mary uses biological problem-solving during a survival crisis.",
+                    "The Martian uses agriculture and innovative problem-solving during a survival crisis.",
+                ],
+                connection="The novels place biological ingenuity beside survival under extreme conditions.",
+                bridge="Biological problem-solving under extreme survival constraints",
+                why_interesting="The comparison highlights ingenuity in hostile environments.",
+                where_it_breaks="Hydroponic cultivation does not explain selective breeding or interspecies cooperation.",
+                new_question="How could interspecies cooperation help solve real-world survival problems?",
+                claims=[SidequestClaim(claim_type="interpretation", text="The survival methods can be compared as biological ingenuity.")],
+            )])
+
+        def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+            raise AssertionError("A one-candidate external batch must not reach the critic.")
+
+    app.dependency_overrides[get_ai_client] = lambda: LaunderedHydroponicsAI()
+    with caplog.at_level("INFO", logger="app.main"):
+        response = client.post("/api/sidequests/surprise")
+
+    assert response.status_code == 422
+    assert "two distinct external investigation directions" in response.json()["detail"]
+    assert '"outcome": "candidate_count_shortfall"' in caplog.text
+    assert '"sent_to_critic": 0' in caplog.text
+    assert '"outcome": "insufficient_external_competition"' in caplog.text
+    assert client.get("/api/sidequests").json() == []
+
+
+def test_detective_mode_rejects_external_lead_laundering_after_semantic_critique(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    hail_mary = create_item(client, title="Project Hail Mary", creator="Andy Weir").json()["id"]
+    client.post(f"/api/items/{hail_mary}/concepts", json={"name": "Selective breeding for interspecies cooperation", "category": "mechanism"})
+    common = {
+        "item_a_id": hail_mary, "item_b_id": hail_mary, "origin_item_ids": [hail_mary],
+        "clue": "Taumoeba are selectively bred to address the Astrophage threat.", "clue_item_id": hail_mary,
+        "clue_concept_names": ["Selective breeding for interspecies cooperation"], "lead_kind": "unfamiliar_subject",
+    }
+    laundered = ConnectionCandidate(
+        **common, title="Growing a way home", lead="Hydroponic Farming in Space", lead_category="scientific_mechanism",
+        reasoning_steps=["Project Hail Mary uses biological problem-solving during a survival crisis.", "The Martian uses agriculture during a survival crisis."],
+        connection="The novels place biological ingenuity beside survival under extreme conditions.",
+        bridge="Biological problem-solving under extreme survival constraints", why_interesting="It compares two survival toolkits.",
+        where_it_breaks="Hydroponic cultivation does not explain selective breeding or interspecies cooperation.",
+        new_question="How could interspecies cooperation help solve real-world survival problems?",
+        claims=[SidequestClaim(claim_type="interpretation", text="The survival methods can be compared as biological ingenuity.")],
+    )
+    aligned = ConnectionCandidate(
+        **common, title="Making evolution choose the less dangerous exit", lead="Evolutionary steering in antimicrobial resistance",
+        lead_category="scientific_mechanism",
+        reasoning_steps=["Breeding turns variation into a constrained search through traits.", "Evolutionary steering asks which adaptive route a selective environment makes easiest."],
+        connection="The clue suggests treating selection pressure as an intervention surface.",
+        bridge="Reshaping a fitness landscape to redirect adaptation", why_interesting="It asks whether an escape route can be designed.",
+        where_it_breaks="A fictional breeding target is simpler than adaptation in a changing real population.",
+        new_question="Could a treatment make a pathogen's easiest evolutionary escape route also make it less dangerous?",
+        claims=[SidequestClaim(claim_type="speculative_hypothesis", text="Evolutionary steering may be a useful outside lens for the breeding sequence.")],
+    )
+
+    class SemanticLaunderingAI(FakeAI):
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            return CandidateBatch(candidates=[laundered, aligned])
+
+        def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+            return CritiquedConnection(
+                accepted=True, rejection_reason="", **candidates[0], evidence_status="Exploratory.",
+                concepts_used=candidates[0]["clue_concept_names"], evidence=[], selected_candidate_index=0,
+                candidate_assessments=[
+                    SidequestCandidateAssessment(
+                        candidate_index=0, external_lead_aligned=False, mechanism_explained=False,
+                        next_investigation_follows_lead=False, valid=False,
+                        rejection_reason="The reasoning compares library works and never investigates hydroponics.",
+                    ),
+                    SidequestCandidateAssessment(
+                        candidate_index=1, external_lead_aligned=True, mechanism_explained=True,
+                        next_investigation_follows_lead=True, valid=True, rejection_reason="",
+                    ),
+                ],
+            )
+
+    app.dependency_overrides[get_ai_client] = lambda: SemanticLaunderingAI()
+    with caplog.at_level("INFO", logger="app.main"):
+        response = client.post("/api/sidequests/surprise")
+
+    assert response.status_code == 422
+    assert "Fewer than two external directions remained aligned" in response.json()["detail"]
+    assert '"external_lead_mismatch": 1' in caplog.text
+    assert '"mechanism_missing": 1' in caplog.text
+    assert '"next_investigation_mismatch": 1' in caplog.text
+    assert '"outcome": "external_lead_mismatch"' in caplog.text
+    assert client.get("/api/sidequests").json() == []
+
+
+def test_detective_mode_collapses_duplicate_external_directions_before_critique(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    item_id = create_item(client, title="Project Hail Mary").json()["id"]
+    concept_name = "Selective breeding for interspecies cooperation"
+    client.post(f"/api/items/{item_id}/concepts", json={"name": concept_name, "category": "mechanism"})
+    common = {
+        "item_a_id": item_id, "item_b_id": item_id, "origin_item_ids": [item_id],
+        "clue": "Taumoeba are selectively bred under a survival constraint.", "clue_item_id": item_id,
+        "clue_concept_names": [concept_name], "lead_kind": "unfamiliar_subject",
+    }
+    steering = ConnectionCandidate(
+        **common, title="Choosing evolution's exit", lead="Evolutionary steering in antimicrobial resistance",
+        lead_category="scientific_mechanism", connection="Selection pressure can reshape which adaptive escape route is easiest.",
+        bridge="Reshaping a fitness landscape to redirect adaptation", why_interesting="The intervention targets evolution's available exits.",
+        where_it_breaks="A fictional controlled breeding sequence is simpler than a changing clinical population.",
+        new_question="Could a treatment make a pathogen's easiest evolutionary escape route less dangerous?",
+        reasoning_steps=["Breeding searches variation by repeatedly selecting traits.", "Evolutionary steering changes which adaptive route selection rewards."],
+        claims=[SidequestClaim(claim_type="speculative_hypothesis", text="Evolutionary steering may be a useful outside lens.")],
+    )
+    steering_paraphrase = steering.model_copy(update={
+        "title": "Steering an evolutionary escape",
+        "lead": "Antimicrobial-resistance evolutionary steering",
+    })
+    cultural_selection = ConnectionCandidate(
+        **common, title="When selection becomes culture", lead="Cultural selection in craft apprenticeship",
+        lead_category="practice", connection="Repeated choices about which variations to preserve can shape a craft tradition.",
+        bridge="Selective preservation accumulating into a transmitted practice", why_interesting="Selection need not be genetic to redirect variation over time.",
+        where_it_breaks="Craft choices are intentional and socially transmitted rather than inherited biologically.",
+        new_question="Which workshop traditions changed because apprentices repeatedly preserved one difficult variation?",
+        reasoning_steps=["The clue repeatedly preserves selected variations.", "Craft apprenticeship can likewise preserve chosen variations through teaching."],
+        claims=[SidequestClaim(claim_type="speculative_hypothesis", text="Craft transmission may offer a non-biological comparison for cumulative selection.")],
+    )
+
+    class DuplicateDirectionAI(FakeAI):
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            return CandidateBatch(candidates=[steering, steering_paraphrase, cultural_selection])
+
+        def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
+            assert len(candidates) == 2
+            return CritiquedConnection(
+                accepted=True, rejection_reason="", **candidates[0], evidence_status="Exploratory.",
+                concepts_used=candidates[0]["clue_concept_names"], evidence=[], selected_candidate_index=0,
+                candidate_assessments=[SidequestCandidateAssessment(
+                    candidate_index=index, external_lead_aligned=True, mechanism_explained=True,
+                    next_investigation_follows_lead=True, valid=True, rejection_reason="",
+                ) for index in range(2)],
+            )
+
+    app.dependency_overrides[get_ai_client] = lambda: DuplicateDirectionAI()
+    with caplog.at_level("INFO", logger="app.main"):
+        response = client.post("/api/sidequests/surprise")
+
+    assert response.status_code == 201
+    assert '"duplicate_external_leads": 1' in caplog.text
+    assert '"distinct_external_candidates": 2' in caplog.text
+    assert '"sent_to_critic": 2' in caplog.text
+
+
 def test_detective_mode_reports_when_generation_returns_no_candidates(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     item_id = create_item(client, kind="thought", title="A clock that forgets noon").json()["id"]
     client.post(f"/api/items/{item_id}/concepts", json={"name": "Selective timekeeping", "category": "mechanism"})
@@ -847,14 +1228,23 @@ def test_detective_mode_suppresses_a_paraphrased_investigation(client: TestClien
                 clue = "Moments of hesitation become spatial traces on a map of unrealized choices."
                 lead = "Counterfactual cartography records considered routes that a traveler never took."
                 connection = "Spatial hesitation traces preserve choices and considered routes that remain unrealized."
-            return CandidateBatch(candidates=[ConnectionCandidate(
+            primary = ConnectionCandidate(
                 item_a_id=item["id"], item_b_id=item["id"], origin_item_ids=[item["id"]], title="The roads almost taken",
                 clue=clue, clue_item_id=item["id"], clue_concept_names=["Hesitation as spatial data"], lead=lead,
                 lead_kind="unfamiliar_subject", reasoning_steps=["Hesitation marks a still-open choice between routes.", "Recording that mark preserves a route that remained possible but unrealized."],
                 claims=[SidequestClaim(claim_type="interpretation", text="A hesitation trace can represent an unrealized choice."), SidequestClaim(claim_type="speculative_hypothesis", text="Counterfactual maps might preserve routes not taken.")],
                 connection=connection, bridge="Spatial records of unrealized choices and considered routes", why_interesting="It maps possibility rather than only movement.",
                 where_it_breaks="A pause may reflect noise or distraction rather than a meaningful decision between possible routes.", new_question="Which unrealized routes deserve to remain visible?",
-            )])
+            )
+            alternate = primary.model_copy(update={
+                "title": "The pause as a navigational signal",
+                "lead": "Wayfinding systems that expose decision friction",
+                "lead_category": "practice",
+                "connection": "Hesitation could be treated as feedback about where a route description creates uncertainty.",
+                "bridge": "Decision friction revealing where navigation instructions fail",
+                "new_question": "Which intersection designs repeatedly make first-time travelers pause before choosing a route?",
+            })
+            return CandidateBatch(candidates=[primary, alternate])
 
     ai = ParaphraseAI()
     app.dependency_overrides[get_ai_client] = lambda: ai
@@ -878,8 +1268,8 @@ def test_sidequest_insufficient_data_and_rejected_candidate(client: TestClient, 
     assert rejected.status_code == 422
     assert "No compelling case yet" in rejected.json()["detail"]
     assert "Too superficial" in rejected.json()["detail"]
-    assert "more concrete note or discovery" in rejected.json()["detail"]
-    assert '"candidates_reviewed": 1' in caplog.text
+    assert "left the investigation open rather than saving a weak connection" in rejected.json()["detail"]
+    assert '"candidates_reviewed": 2' in caplog.text
     assert '"accepted": false' in caplog.text
     assert '"rejection_reason": "Too superficial"' in caplog.text
     assert '"outcome": "critic_rejected"' in caplog.text
@@ -1718,6 +2108,10 @@ def test_sidequest_rejects_repeated_bridge_and_forces_exploratory_status(client:
         client.post(f"/api/items/{item_id}/concepts", json={"name": name, "category": "mechanism"})
 
     class OverclaimingAI(FakeAI):
+        def generate_candidates(self, contexts: list[dict[str, object]]) -> CandidateBatch:
+            stable_contexts = sorted(contexts, key=lambda context: int(context["item_a"]["id"]))  # type: ignore[index]
+            return super().generate_candidates(stable_contexts)
+
         def critique_candidates(self, candidates: list[dict[str, object]], dossiers: list[dict[str, object]]) -> CritiquedConnection:
             result = super().critique_candidates(candidates, dossiers)
             return result.model_copy(update={"evidence_status": "Verified scientific relationship."})

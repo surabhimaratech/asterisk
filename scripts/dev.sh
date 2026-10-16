@@ -25,7 +25,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-(cd "$project_dir/backend" && .venv/bin/uvicorn app.main:app --reload) &
+(cd "$project_dir/backend" && .venv/bin/uvicorn app.main:app --reload --log-level "${ASTERISK_LOG_LEVEL:-info}") &
 backend_pid=$!
 (cd "$project_dir/frontend" && npm run dev) &
 frontend_pid=$!

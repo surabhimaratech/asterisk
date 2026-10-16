@@ -36,6 +36,33 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} i
 SessionLocal = sessionmaker(bind=engine)
 logger = logging.getLogger(__name__)
 
+
+def configure_application_logging(
+    target_logger: logging.Logger = logger,
+    server_logger: logging.Logger | None = None,
+) -> None:
+    """Route application diagnostics through Uvicorn's terminal handler when available."""
+    configured_level = os.getenv("ASTERISK_LOG_LEVEL", "INFO").upper()
+    target_logger.setLevel(getattr(logging, configured_level, logging.INFO))
+    server_logger = server_logger or logging.getLogger("uvicorn.error")
+    server_handlers: list[logging.Handler] = []
+    current_logger: logging.Logger | None = server_logger
+    while current_logger is not None:
+        if current_logger.handlers:
+            server_handlers = list(current_logger.handlers)
+            break
+        if not current_logger.propagate:
+            break
+        current_logger = current_logger.parent
+    if not target_logger.handlers and server_handlers:
+        for handler in server_handlers:
+            target_logger.addHandler(handler)
+    # Uvicorn has no root handler; tests do, so only stop propagation when we attached a server handler.
+    target_logger.propagate = not bool(target_logger.handlers)
+
+
+configure_application_logging()
+
 class Base(DeclarativeBase):
     pass
 
@@ -642,7 +669,7 @@ def ai_http_error(exc: Exception) -> HTTPException:
     return HTTPException(502, str(exc))
 
 def sidequest_rejection_detail(reason: str | None = None) -> str:
-    guidance = "No compelling case yet. Try adding a more concrete note or discovery, then follow another clue."
+    guidance = "No compelling case yet. Asterisk left the investigation open rather than saving a weak connection."
     if reason and reason.strip():
         return f"Asterisk investigated the available leads but did not save a Sidequest. {reason.strip()} {guidance}"
     return guidance
@@ -898,6 +925,40 @@ def token_overlap(left: set[str], right: set[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left & right) / min(len(left), len(right))
+
+
+def sidequest_clue_key(candidate) -> tuple[int | None, tuple[str, ...]]:
+    return (
+        candidate.clue_item_id,
+        tuple(sorted(normalize_concept_term(name) for name in candidate.clue_concept_names)),
+    )
+
+
+def sidequest_directions_are_duplicates(left, right) -> bool:
+    """Conservatively collapse the same external lead expressed with lightly different wording."""
+    left_lead = idea_tokens(left.lead)
+    right_lead = idea_tokens(right.lead)
+    left_substance = idea_tokens(left.connection, left.bridge, *left.reasoning_steps, left.new_question)
+    right_substance = idea_tokens(right.connection, right.bridge, *right.reasoning_steps, right.new_question)
+    lead_shared = len(left_lead & right_lead)
+    substance_shared = len(left_substance & right_substance)
+    return (
+        lead_shared >= 2 and token_overlap(left_lead, right_lead) >= 0.72
+        and substance_shared >= 4 and token_overlap(left_substance, right_substance) >= 0.62
+    )
+
+
+def distinct_external_sidequest_candidates(candidates: list) -> tuple[list, int]:
+    distinct: list = []
+    duplicate_count = 0
+    for candidate in candidates:
+        if candidate.lead_kind != "unfamiliar_subject":
+            continue
+        if any(sidequest_directions_are_duplicates(candidate, existing) for existing in distinct):
+            duplicate_count += 1
+        else:
+            distinct.append(candidate)
+    return distinct, duplicate_count
 
 
 def concepts_are_semantic_duplicates(
@@ -2136,8 +2197,11 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
             (item for item in eligible if item.id != clue_item.id),
             key=lambda item: (item.kind != clue_item.kind, clue_score(payloads[item.id]["concepts"][0]), -item.id),
             reverse=True,
-        )[:4]
-        possible_leads = [{**payloads[item.id], "concepts": payloads[item.id]["concepts"][:1]} for item in other_items]
+        )[:2]
+        possible_leads = [{
+            "id": item.id, "kind": item.kind, "title": item.title, "note": item.note,
+            "concepts": payloads[item.id]["concepts"][:1],
+        } for item in other_items]
         candidate_contexts.append({
             "mode": "clue_investigation", "focus_concept": focus_concept["name"],
             "item_a": clue_payload, "item_b": None, "possible_library_leads": possible_leads,
@@ -2174,7 +2238,15 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
 
     try:
         generated = ai.generate_candidates(candidate_contexts)
-        log_sidequest_stage(run_id, "generation", generated_candidates=len(generated.candidates))
+        lead_kind_counts: dict[str, int] = {}
+        lead_category_counts: dict[str, int] = {}
+        for candidate in generated.candidates:
+            lead_kind_counts[candidate.lead_kind] = lead_kind_counts.get(candidate.lead_kind, 0) + 1
+            lead_category_counts[candidate.lead_category] = lead_category_counts.get(candidate.lead_category, 0) + 1
+        log_sidequest_stage(
+            run_id, "generation", generated_candidates=len(generated.candidates),
+            lead_kinds=lead_kind_counts, lead_categories=lead_category_counts,
+        )
         normalized_candidates = [candidate.model_copy(update={
             "origin_item_ids": candidate_origin_ids(candidate),
             "invitation": candidate.invitation or candidate.new_question,
@@ -2198,25 +2270,127 @@ def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(ge
         for reason in rejected_reasons:
             safe_reason = sidequest_log_reason(reason)
             rejection_counts[safe_reason] = rejection_counts.get(safe_reason, 0) + 1
+        validation_details = {"sent_to_critic": 0} if not valid_candidates else {}
         log_sidequest_stage(
             run_id, "validation",
             generated_candidates=len(normalized_candidates),
             rejected_candidates=len(rejected_reasons),
             rejection_reasons=rejection_counts,
-            sent_to_critic=len(valid_candidates),
+            structurally_valid_candidates=len(valid_candidates),
+            **validation_details,
         )
         if not valid_candidates:
             summary = "; ".join(dict.fromkeys(rejected_reasons))
             log_sidequest_stage(run_id, "final", outcome="all_candidates_rejected", reason=sidequest_log_reason(summary), saved=False)
             raise HTTPException(422, sidequest_rejection_detail(summary))
-        final = ai.critique_candidates([candidate.model_dump() for candidate in valid_candidates], candidate_contexts)
+
+        external_groups: dict[tuple[int | None, tuple[str, ...]], list] = {}
+        for candidate in valid_candidates:
+            if candidate.lead_kind == "unfamiliar_subject":
+                external_groups.setdefault(sidequest_clue_key(candidate), []).append(candidate)
+        group_results = [
+            (key, *distinct_external_sidequest_candidates(group))
+            for key, group in external_groups.items()
+        ]
+        winning_key, distinct_external, duplicate_external_count = max(
+            group_results, key=lambda result: len(result[1]),
+            default=((None, ()), [], 0),
+        )
+        if len(distinct_external) < 2:
+            reason = "The generator did not produce two distinct external investigation directions from the same clue."
+            log_sidequest_stage(
+                run_id, "competition", distinct_external_candidates=len(distinct_external),
+                duplicate_external_leads=sum(result[2] for result in group_results),
+                external_clue_groups=len(group_results), sent_to_critic=0,
+                outcome="candidate_count_shortfall",
+            )
+            log_sidequest_stage(run_id, "final", outcome="insufficient_external_competition", reason=reason, saved=False)
+            raise HTTPException(422, sidequest_rejection_detail(reason))
+
+        critic_candidates = [
+            candidate for candidate in valid_candidates
+            if sidequest_clue_key(candidate) == winning_key
+            and (candidate.lead_kind == "library_item" or candidate in distinct_external)
+        ]
         log_sidequest_stage(
-            run_id, "critic", candidates_reviewed=len(valid_candidates), accepted=final.accepted,
+            run_id, "competition", distinct_external_candidates=len(distinct_external),
+            duplicate_external_leads=sum(result[2] for result in group_results),
+            external_clue_groups=len(group_results), sent_to_critic=len(critic_candidates),
+            library_competitors=sum(candidate.lead_kind == "library_item" for candidate in critic_candidates),
+            outcome="ready_for_critic",
+        )
+        final = ai.critique_candidates([candidate.model_dump() for candidate in critic_candidates], candidate_contexts)
+        log_sidequest_stage(
+            run_id, "critic", candidates_reviewed=len(critic_candidates), accepted=final.accepted,
             rejection_reason=sidequest_log_reason(final.rejection_reason) if not final.accepted else "",
+            selected_lead_kind=final.lead_kind if final.accepted else None,
+            selected_lead_category=final.lead_category if final.accepted else None,
         )
     except (AIConfigurationError, AIProviderError) as exc:
         log_sidequest_stage(run_id, "final", outcome="provider_error", reason=sidequest_log_reason(str(exc)), saved=False)
         raise ai_http_error(exc) from exc
+    assessment_by_index = {assessment.candidate_index: assessment for assessment in final.candidate_assessments}
+    expected_assessment_indices = set(range(len(critic_candidates)))
+    if set(assessment_by_index) != expected_assessment_indices or len(final.candidate_assessments) != len(critic_candidates):
+        reason = "The critic did not assess every candidate independently."
+        log_sidequest_stage(run_id, "final", outcome="incomplete_critic_assessment", reason=reason, saved=False)
+        raise HTTPException(422, sidequest_rejection_detail(reason))
+    semantically_valid_external = [
+        index for index, candidate in enumerate(critic_candidates)
+        if candidate.lead_kind == "unfamiliar_subject"
+        and assessment_by_index[index].valid
+        and assessment_by_index[index].external_lead_aligned
+        and assessment_by_index[index].mechanism_explained
+        and assessment_by_index[index].next_investigation_follows_lead
+    ]
+    mismatch_counts = {
+        "external_lead_mismatch": sum(
+            candidate.lead_kind == "unfamiliar_subject" and not assessment_by_index[index].external_lead_aligned
+            for index, candidate in enumerate(critic_candidates)
+        ),
+        "mechanism_missing": sum(not assessment.mechanism_explained for assessment in final.candidate_assessments),
+        "next_investigation_mismatch": sum(not assessment.next_investigation_follows_lead for assessment in final.candidate_assessments),
+    }
+    assessment_rejection_reasons: dict[str, int] = {}
+    for assessment in final.candidate_assessments:
+        if assessment.valid:
+            continue
+        safe_reason = sidequest_log_reason(assessment.rejection_reason)
+        assessment_rejection_reasons[safe_reason] = assessment_rejection_reasons.get(safe_reason, 0) + 1
+    log_sidequest_stage(
+        run_id, "critic_assessment", semantically_valid_external_candidates=len(semantically_valid_external),
+        critic_rejection_reasons=assessment_rejection_reasons, **mismatch_counts,
+    )
+    if len(semantically_valid_external) < 2:
+        reason = "Fewer than two external directions remained aligned with their stated leads after critique."
+        log_sidequest_stage(run_id, "final", outcome="external_lead_mismatch", reason=reason, saved=False, **mismatch_counts)
+        raise HTTPException(422, sidequest_rejection_detail(reason))
+    if final.accepted and (
+        final.selected_candidate_index is None
+        or final.selected_candidate_index not in assessment_by_index
+        or not assessment_by_index[final.selected_candidate_index].valid
+    ):
+        reason = "The critic selected a candidate that did not pass its own semantic assessment."
+        log_sidequest_stage(run_id, "final", outcome="invalid_critic_selection", reason=reason, saved=False)
+        raise HTTPException(422, sidequest_rejection_detail(reason))
+    if final.accepted:
+        selected_candidate = critic_candidates[final.selected_candidate_index]
+        copied_fields = ("clue", "lead", "connection", "bridge", "new_question")
+        selection_matches = (
+            candidate_origin_ids(final) == candidate_origin_ids(selected_candidate)
+            and final.lead_kind == selected_candidate.lead_kind
+            and final.lead_category == selected_candidate.lead_category
+            and all(
+                normalize_concept_term(getattr(final, field))
+                == normalize_concept_term(getattr(selected_candidate, field))
+                for field in copied_fields
+            )
+        )
+        if not selection_matches:
+            reason = "The critic's selected result did not correspond to the candidate it marked as selected."
+            log_sidequest_stage(run_id, "final", outcome="invalid_critic_selection", reason=reason, saved=False)
+            raise HTTPException(422, sidequest_rejection_detail(reason))
+
     final_origin_ids = candidate_origin_ids(final)
     if not final.accepted or frozenset(final_origin_ids) not in allowed_origins:
         reason = final.rejection_reason or "The critic selected an investigation outside the supplied clue dossiers."

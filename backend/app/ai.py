@@ -277,7 +277,7 @@ class ConnectionCandidate(BaseModel):
     clue_source_ids: list[str] = Field(default_factory=list, max_length=4)
     lead: str = Field(default="", max_length=500)
     lead_kind: Literal["library_item", "unfamiliar_subject"] = "unfamiliar_subject"
-    lead_category: Literal["phenomenon", "practice", "historical_event", "intellectual_problem", "artistic_technique", "library_curiosity"] = "intellectual_problem"
+    lead_category: Literal["phenomenon", "practice", "historical_event", "intellectual_problem", "artistic_technique", "scientific_mechanism", "library_curiosity"] = "intellectual_problem"
     lead_source_ids: list[str] = Field(default_factory=list, max_length=4)
     reasoning_steps: list[str] = Field(default_factory=list, max_length=4)
     claims: list[SidequestClaim] = Field(default_factory=list, max_length=8)
@@ -286,6 +286,16 @@ class ConnectionCandidate(BaseModel):
 class CandidateBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     candidates: list[ConnectionCandidate] = Field(max_length=6)
+
+
+class SidequestCandidateAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate_index: int = Field(ge=0, le=5)
+    external_lead_aligned: bool
+    mechanism_explained: bool
+    next_investigation_follows_lead: bool
+    valid: bool
+    rejection_reason: str = Field(max_length=500)
 
 
 class CritiquedConnection(BaseModel):
@@ -313,10 +323,12 @@ class CritiquedConnection(BaseModel):
     clue_source_ids: list[str] = Field(default_factory=list, max_length=4)
     lead: str = Field(default="", max_length=500)
     lead_kind: Literal["library_item", "unfamiliar_subject"] = "unfamiliar_subject"
-    lead_category: Literal["phenomenon", "practice", "historical_event", "intellectual_problem", "artistic_technique", "library_curiosity"] = "intellectual_problem"
+    lead_category: Literal["phenomenon", "practice", "historical_event", "intellectual_problem", "artistic_technique", "scientific_mechanism", "library_curiosity"] = "intellectual_problem"
     lead_source_ids: list[str] = Field(default_factory=list, max_length=4)
     reasoning_steps: list[str] = Field(default_factory=list, max_length=4)
     claims: list[SidequestClaim] = Field(default_factory=list, max_length=8)
+    selected_candidate_index: int | None
+    candidate_assessments: list[SidequestCandidateAssessment] = Field(min_length=1, max_length=6)
 
 
 class OpenRouterClient:

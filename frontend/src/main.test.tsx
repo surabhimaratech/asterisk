@@ -129,11 +129,11 @@ describe('discovery card hierarchy', () => {
 describe('Sidequest preparation', () => {
   it('shows a no-case outcome without pretending a Sidequest was created', () => {
     const item = { id: 1, kind: 'book' as const, title: 'A Psalm for the Wild-Built', note: null, url: null, creator: null, release_year: null, work_scope: 'individual' as const, parent_work_title: null, canonical_identity_id: null, progress_status: 'finished' as const, progress_current: null, progress_total: null, progress_unit: 'book' as const, spoiler_policy: 'full' as const, created_at: new Date().toISOString() }
-    render(<SidequestsView items={[item]} conceptCounts={{ 1: 1 }} sidequests={[]} invitations={[]} busy={false} outcome="Asterisk investigated the available leads but did not save a Sidequest. The critic found only a thematic parallel. No compelling case yet. Try another concrete clue." onExplore={() => undefined} onSurprise={() => undefined} />)
+    render(<SidequestsView items={[item]} conceptCounts={{ 1: 1 }} sidequests={[]} invitations={[]} busy={false} outcome="Asterisk investigated the available leads but did not save a Sidequest. The critic found only a thematic parallel. No compelling case yet. Asterisk left the investigation open rather than saving a weak connection." onExplore={() => undefined} onSurprise={() => undefined} />)
 
     expect(screen.getByRole('status')).toHaveTextContent('No compelling case yet.')
     expect(screen.getByRole('status')).toHaveTextContent('The critic found only a thematic parallel.')
-    expect(screen.getByRole('status')).toHaveTextContent('Try another concrete clue.')
+    expect(screen.getByRole('status')).toHaveTextContent('left the investigation open rather than saving a weak connection')
     expect(screen.queryByText(/new Sidequest sparked/i)).not.toBeInTheDocument()
   })
 
