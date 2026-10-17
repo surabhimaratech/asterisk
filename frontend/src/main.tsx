@@ -18,6 +18,7 @@ type IdentityCandidate = { candidate_id: string; title: string; creator: string;
 type Enrichment = { status: 'not_researched' | 'researched' | 'needs_confirmation'; resolved_title: string | null; creator: string | null; release_info: string | null; identity_summary: string | null; confirmation_question: string | null; identity_status: 'unresolved' | 'ambiguous' | 'confirmed' | 'not_applicable'; identity_key: string | null; resolved_media_type: Kind | null; resolved_work_scope: WorkScope | null; parent_work_title: string | null; canonical_identity_id: string | null; identity_confidence: number | null; identity_candidates: IdentityCandidate[]; identity_sources: FindingSource[]; confirmed_at: string | null; researched_at: string | null; sources: ResearchSource[]; concepts: ItemConcept[]; rejected_leads: RejectedFinding[] }
 type SidequestClaim = { claim_type: 'supported_fact' | 'interpretation' | 'speculative_hypothesis'; text: string; source_ids: string[] }
 type Sidequest = { id: number; item_a_id: number; item_b_id: number; item_a_title: string; item_b_title: string; title: string; connection: string; bridge: string; why_interesting: string; where_it_breaks: string; new_question: string; evidence_status: string; concepts_used: string[]; evidence: string[]; origin_item_ids: number[]; origin_titles: string[]; discovery_kind: string; invitation: string; detective_version?: number; clue?: { text: string; item_id: number; concept_names: string[]; source_ids: string[] } | null; lead?: { text: string; kind: 'library_item' | 'unfamiliar_subject'; category?: string; source_ids: string[] } | null; reasoning_steps?: string[]; claims?: SidequestClaim[]; created_at: string }
+type ResearchDiscovery = { seed_item_id: number; seed_title: string; directions: { question: string; why_promising: string; seed_detail: string; search_queries: string[] }[]; title: string; discovery: string; why_surprising: string; connection_to_library: string | null; what_remains_uncertain: string; next_rabbit_hole: string; claims: { claim_type: 'supported_fact' | 'interpretation' | 'speculation'; text: string; source_ids: string[] }[]; evidence: { source_id: string; url: string; title: string; excerpt: string }[]; evidence_status: string; persisted: boolean }
 type ExplorationInvitation = { id: number; item_id: number; item_title: string; source_concept_id: number | null; active_concept_id: number | null; source_concept_name: string; question: string; status: 'queued' | 'dismissed'; user_note: string | null; available: boolean; created_at: string; updated_at: string }
 
 const kinds: Kind[] = ['book', 'movie', 'tv_series', 'podcast', 'article', 'concept', 'question', 'thought']
@@ -346,6 +347,7 @@ export function App() {
     {selectedItem && <div className="concept-callout"><span>✦ Look beneath the surface</span><button type="button" onClick={() => exploreConcepts(selectedItem)}>{conceptCounts[selectedItem.id] > 0 ? 'View Concepts' : 'Explore Concepts'}</button></div>}
     {conceptItem && <ConceptExplorer item={conceptItem} onClose={() => setConceptItem(null)} onError={setError} onChange={count => setConceptCounts(current => ({ ...current, [conceptItem.id]: count }))} onInvitationsChange={refreshExplorationInvitations} />}
 
+    <ResearchSidequestBeta items={items} />
     <SidequestsView items={items} conceptCounts={conceptCounts} sidequests={sidequests} invitations={explorationInvitations} busy={sidequestBusy} outcome={sidequestOutcome} onExplore={exploreConcepts} onSurprise={() => void surpriseMe()} />
     {error && <div className="error" role="alert">{error}</div>}
     {success && <div className="success" role="status">{success}</div>}
@@ -754,6 +756,47 @@ export function RejectedFindingCard({ finding, onReview, onReevaluate, onInteres
     {finding.stage === 'concept_candidate' && <><textarea rows={2} maxLength={2000} placeholder="Optional note: why do you want to keep or dismiss this?" value={note} onChange={event => setNote(event.target.value)} /><div className="review-actions"><button type="button" className={finding.loved ? 'loved' : ''} disabled={busy} onClick={() => void onFeedback(finding, 'love')}>{finding.loved ? '♥ Loved' : '♡ Love'}</button><button type="button" className={finding.surprised ? 'surprised' : ''} disabled={busy} onClick={() => void onFeedback(finding, 'surprise')}>{finding.surprised ? '✦ Surprised' : '◇ Surprise'}</button><button type="button" className={finding.interested ? 'interested' : ''} disabled={busy} onClick={() => void onInterest(finding)}>{finding.interested ? '★ Interested' : '☆ Interested'}</button><button type="button" disabled={busy || finding.human_review_status === 'kept'} onClick={() => void decide('keep')}>Keep anyway</button><button type="button" disabled={busy || finding.human_review_status === 'dismissed'} onClick={() => void decide('dismiss')}>Dismiss</button>{finding.human_review_status !== 'pending' && <button type="button" disabled={busy} onClick={() => void decide('pending')}>Undo decision</button>}<button type="button" disabled={busy} onClick={() => void reevaluate()}>Re-evaluate evidence</button></div><small>Love, Surprise, and Interested shape future discovery; Keep anyway makes this exploratory finding available to Sidequests. None changes its evidence status.</small></>}
   </article>
 }
+
+export function ResearchSidequestBeta({ items }: { items: Item[] }) {
+  const [seedId, setSeedId] = useState('')
+  const [result, setResult] = useState<ResearchDiscovery | null>(null)
+  const [outcome, setOutcome] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function research() {
+    if (!seedId) return
+    setBusy(true)
+    setResult(null)
+    setOutcome('')
+    try {
+      const response = await fetch('/api/discoveries/research', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_id: Number(seedId) }),
+      })
+      if (!response.ok) throw new Error(await responseError(response, 'Research could not produce a discovery'))
+      setResult(await response.json())
+    } catch (caught) {
+      setOutcome(caught instanceof Error ? caught.message : 'Research could not produce a discovery')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <section className="research-sidequest-beta" aria-labelledby="research-sidequest-title">
+    <div className="beta-heading"><div><span>EXPERIMENT · DISCOVERY ENGINE v0.1</span><h2 id="research-sidequest-title">Research a Sidequest <small>Beta</small></h2><p>Choose one curiosity. Asterisk will follow several leads into real sources and return one discovery worth learning on its own.</p></div></div>
+    <div className="beta-controls"><label htmlFor="research-seed">Start with</label><select id="research-seed" value={seedId} onChange={event => setSeedId(event.target.value)}><option value="">Choose a curiosity…</option>{items.map(item => <option value={item.id} key={item.id}>{labels[item.kind]} · {item.title}</option>)}</select><button type="button" disabled={!seedId || busy} onClick={() => void research()}>{busy ? '✦ Researching…' : '✦ Research a Sidequest'}</button></div>
+    <p className="beta-note">This experiment uses bounded external search and is not added to your saved Sidequests.</p>
+    {outcome && <div className="beta-outcome" role="status"><strong>No researched discovery yet.</strong><p>{outcome.replace(/^No researched discovery yet\.\s*/, '')}</p></div>}
+    {result && <article className="researched-discovery-card">
+      <div className="evidence-label">✦ RESEARCH-BACKED BETA · {result.seed_title}</div><h3>{result.title}</h3>
+      <section><h4>The discovery</h4><p>{result.discovery}</p></section>
+      <div className="researched-discovery-grid"><section><h4>Why it’s surprising</h4><p>{result.why_surprising}</p></section>{result.connection_to_library && <section><h4>Connection to my library</h4><p>{result.connection_to_library}</p></section>}<section><h4>What remains uncertain</h4><p>{result.what_remains_uncertain}</p></section><section><h4>Next rabbit hole</h4><p>{result.next_rabbit_hole}</p></section></div>
+      <div className="discovery-claims"><h4>What the evidence supports</h4>{result.claims.map((claim, index) => <p className={claim.claim_type} key={`${claim.claim_type}-${index}`}><b>{claim.claim_type.split('_').join(' ')}</b>{claim.text}</p>)}</div>
+      <div className="discovery-sources"><h4>Sources</h4>{result.evidence.map(source => <article key={source.source_id}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a><p>{source.excerpt}</p></article>)}</div>
+    </article>}
+  </section>
+}
+
 
 function SidequestCard({ sidequest }: { sidequest: Sidequest }) {
   const detective = sidequest.detective_version === 1 && sidequest.clue && sidequest.lead && (sidequest.reasoning_steps?.length || 0) >= 2

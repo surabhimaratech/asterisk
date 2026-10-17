@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { App, ConceptExplorer, DiscoveryCard, ItemCard, RejectedFindingCard, SidequestsView } from './main'
+import { App, ConceptExplorer, DiscoveryCard, ItemCard, RejectedFindingCard, ResearchSidequestBeta, SidequestsView } from './main'
 
 afterEach(() => {
   cleanup()
@@ -196,6 +196,33 @@ describe('Sidequest preparation', () => {
     expect(screen.getByText('Asterisk’s interpretation')).toBeInTheDocument()
     expect(screen.getByText('The hunch')).toBeInTheDocument()
     expect(screen.getByText('Next investigation')).toBeInTheDocument()
+  })
+})
+
+describe('Discovery Engine beta', () => {
+  it('lets the user choose one seed and renders a cited standalone discovery', async () => {
+    const item = { id: 9, kind: 'book' as const, title: 'Piranesi', note: 'Tides and journals', url: null, creator: null, release_year: null, work_scope: 'individual' as const, parent_work_title: null, canonical_identity_id: null, progress_status: 'finished' as const, progress_current: null, progress_total: null, progress_unit: 'book' as const, spoiler_policy: 'full' as const, created_at: new Date().toISOString() }
+    const result = {
+      seed_item_id: 9, seed_title: 'Piranesi', directions: [], title: 'When tide tables became infrastructure',
+      discovery: 'Published observations helped ports predict recurring water levels.', why_surprising: 'A notebook-like practice coordinated strangers.',
+      connection_to_library: null, what_remains_uncertain: 'Adoption varied by port.', next_rabbit_hole: 'Which port published the first public table?',
+      claims: [{ claim_type: 'supported_fact', text: 'Ports published tide tables.', source_ids: ['discovery-source-1'] }],
+      evidence: [{ source_id: 'discovery-source-1', url: 'https://example.org/tides', title: 'Tide archive', excerpt: 'Ports published tables for navigation.' }],
+      evidence_status: 'Research-backed', persisted: false,
+    }
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ResearchSidequestBeta items={[item]} />)
+
+    fireEvent.change(screen.getByLabelText('Start with'), { target: { value: '9' } })
+    fireEvent.click(screen.getByRole('button', { name: '✦ Research a Sidequest' }))
+
+    expect(await screen.findByText('When tide tables became infrastructure')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Tide archive ↗' })).toHaveAttribute('href', 'https://example.org/tides')
+    expect(screen.queryByText('Connection to my library')).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/api/discoveries/research', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ item_id: 9 }),
+    }))
   })
 })
 

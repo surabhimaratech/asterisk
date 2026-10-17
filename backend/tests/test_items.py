@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, SidequestCandidateAssessment, SidequestClaim, ValidatedConcept, WorkUnderstanding, strict_json_schema
+from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, DiscoveryDirection, DiscoveryDirectionBatch, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ResearchedDiscoveryClaim, ResearchedDiscoveryDraft, SidequestCandidateAssessment, SidequestClaim, ValidatedConcept, WorkUnderstanding, strict_json_schema
 from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, ItemConcept, app, concepts_are_semantic_duplicates, configure_application_logging, deduplicate_concept_candidates, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
 from app.prompts import CONNECTION_SYSTEM_PROMPT
 from app.quality import assess_research_problem, candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
@@ -618,6 +618,210 @@ def test_sidequest_generation_and_persistence(client: TestClient) -> None:
     assert created.status_code == 201
     assert created.json()["evidence_status"].startswith("Exploratory")
     assert client.get("/api/sidequests").json() == [created.json()]
+
+
+def test_researched_discovery_is_cited_standalone_and_not_persisted(client: TestClient) -> None:
+    item_id = create_item(client, title="Piranesi", note="The journals and tides stayed with me.").json()["id"]
+    client.post(f"/api/items/{item_id}/concepts", json={"name": "External memory", "category": "mechanism"})
+
+    class DiscoveryAI(FakeAI):
+        seed: dict[str, object] = {}
+        directions: list[dict[str, object]] = []
+
+        def propose_discovery_directions(self, seed: dict[str, object]) -> DiscoveryDirectionBatch:
+            self.seed = seed
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(
+                    question="How have tide tables served as civic memory?", seed_detail="Journals record recurring tides.",
+                    why_promising="It turns private notation into shared prediction.", search_queries=["history tide tables civic navigation"],
+                ),
+                DiscoveryDirection(
+                    question="Which buildings encode recurring water levels?", seed_detail="The setting is organized by tidal recurrence.",
+                    why_promising="Architecture can make environmental memory visible.", search_queries=["architecture marks historic flood levels"],
+                ),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            self.directions = directions
+            assert sources[0]["source_id"] == "discovery-source-1"
+            return ResearchedDiscoveryDraft(
+                accepted=True, rejection_reason="", title="The tide table that became public infrastructure",
+                discovery="Nineteenth-century tide prediction moved recurring observations into published tables used by ports.",
+                why_surprising="A repetitive notebook practice became infrastructure for coordinating strangers.",
+                connection_to_library=None,
+                what_remains_uncertain="The retrieved source does not establish how uniformly ports adopted the tables.",
+                next_rabbit_hole="Which port first treated tide prediction as a public service?",
+                claims=[
+                    ResearchedDiscoveryClaim(
+                        claim_type="supported_fact", text="Published tide tables supported port navigation.",
+                        source_ids=["discovery-source-1"],
+                    ),
+                    ResearchedDiscoveryClaim(
+                        claim_type="interpretation", text="A record can become coordination infrastructure.", source_ids=[],
+                    ),
+                ],
+            )
+
+    class DiscoveryResearch:
+        captured_directions: list[dict[str, object]] = []
+
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            self.captured_directions = directions
+            return ResearchPacket(synthesis="An institutional history describes published tide tables.", sources=[RetrievedSource(
+                url="https://example.org/archive/tide-tables", title="A history of tide prediction",
+                excerpt="Published tide tables became an aid to navigation and port planning.",
+            )])
+
+    ai = DiscoveryAI()
+    research = DiscoveryResearch()
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    app.dependency_overrides[get_research_provider] = lambda: research
+
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["connection_to_library"] is None
+    assert body["persisted"] is False
+    assert body["evidence"] == [{
+        "source_id": "discovery-source-1", "url": "https://example.org/archive/tide-tables",
+        "title": "A history of tide prediction",
+        "excerpt": "Published tide tables became an aid to navigation and port planning.",
+    }]
+    assert body["claims"][0]["source_ids"] == ["discovery-source-1"]
+    assert ai.seed["note"] == "The journals and tides stayed with me."
+    assert len(research.captured_directions) == 2
+    assert client.get("/api/sidequests").json() == []
+
+
+def test_researched_discovery_returns_no_result_without_credible_sources(client: TestClient) -> None:
+    item_id = create_item(client, kind="thought", title="Maps remember hesitation").json()["id"]
+
+    class DirectionAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(question="Where are pauses mapped?", why_promising="A traceable practice.", seed_detail="Hesitation.", search_queries=["mapped pauses"]),
+                DiscoveryDirection(question="How do maps record uncertainty?", why_promising="A documented technique.", seed_detail="Uncertain routes.", search_queries=["cartography uncertainty"]),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources):
+            raise AssertionError("Synthesis must not run without inspectable sources.")
+
+    class EmptyResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="Nothing credible was retrieved.", sources=[])
+
+    app.dependency_overrides[get_ai_client] = lambda: DirectionAI()
+    app.dependency_overrides[get_research_provider] = lambda: EmptyResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 422
+    assert "No researched discovery yet" in response.json()["detail"]
+    assert client.get("/api/sidequests").json() == []
+
+
+def test_researched_discovery_reports_search_failure(client: TestClient) -> None:
+    item_id = create_item(client, kind="concept", title="Distributed systems").json()["id"]
+
+    class DirectionAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(question="How do crews coordinate?", why_promising="Documented cases exist.", seed_detail="Coordination.", search_queries=["crew coordination case"]),
+                DiscoveryDirection(question="Where do local rules fail?", why_promising="Failure reports are searchable.", seed_detail="Local rules.", search_queries=["local rules failure report"]),
+            ])
+
+    class FailingResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            raise AIProviderError("Discovery research timed out. Existing data was preserved.")
+
+    app.dependency_overrides[get_ai_client] = lambda: DirectionAI()
+    app.dependency_overrides[get_research_provider] = lambda: FailingResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 502
+    assert "timed out" in response.json()["detail"]
+
+
+def test_researched_discovery_rejects_invented_source_attribution(client: TestClient) -> None:
+    item_id = create_item(client, kind="article", title="An unusual archive").json()["id"]
+
+    class InventedCitationAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(question="What did the archive preserve?", why_promising="A documented collection.", seed_detail="The archive.", search_queries=["unusual archive collection"]),
+                DiscoveryDirection(question="Who used the collection?", why_promising="Institutional records may answer it.", seed_detail="Its users.", search_queries=["archive collection users"]),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            return ResearchedDiscoveryDraft(
+                accepted=True, rejection_reason="", title="An unsupported discovery",
+                discovery="The result cites a source the search never returned.", why_surprising="It sounds convincing.",
+                connection_to_library=None, what_remains_uncertain="The citation is missing.",
+                next_rabbit_hole="Where is the real record?", claims=[ResearchedDiscoveryClaim(
+                    claim_type="supported_fact", text="An unsupported factual claim.",
+                    source_ids=["discovery-source-99"],
+                )],
+            )
+
+    class OneSourceResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="One source was retrieved.", sources=[RetrievedSource(
+                url="https://example.org/real-source", title="Real source", excerpt="A real but different record.",
+            )])
+
+    app.dependency_overrides[get_ai_client] = lambda: InventedCitationAI()
+    app.dependency_overrides[get_research_provider] = lambda: OneSourceResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 422
+    assert "source that was not retrieved" in response.json()["detail"]
+    assert client.get("/api/sidequests").json() == []
+
+
+def test_researched_discovery_seed_excludes_concepts_beyond_spoiler_ceiling(client: TestClient) -> None:
+    item_id = create_item(client, title="Unfinished novel", progress_status="planned", spoiler_policy="avoid").json()["id"]
+    client.post(f"/api/items/{item_id}/concepts", json={"name": "Premise-safe clue", "category": "general"})
+    override = app.dependency_overrides[get_db]
+    session_generator = override()
+    session = next(session_generator)
+    session.add(ItemConcept(
+        item_id=item_id, name="Ending revelation", category="general", origin="ai", spoiler_scope="full",
+    ))
+    session.commit()
+    session.close()
+
+    class CapturingAI(FakeAI):
+        seed: dict[str, object] = {}
+
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            self.seed = seed
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(question="What practices echo the premise?", why_promising="A safe lead.", seed_detail="Premise.", search_queries=["premise practice"]),
+                DiscoveryDirection(question="Which archives preserve similar rules?", why_promising="An archival lead.", seed_detail="Premise rule.", search_queries=["archive premise rule"]),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            return ResearchedDiscoveryDraft(
+                accepted=True, rejection_reason="", title="A safe discovery", discovery="An archive documents the practice.",
+                why_surprising="The practice survived in an unexpected setting.", connection_to_library="The premise supplies the question.",
+                what_remains_uncertain="The source covers one archive.", next_rabbit_hole="Which second archive records it?",
+                claims=[ResearchedDiscoveryClaim(claim_type="supported_fact", text="The archive documents it.", source_ids=["discovery-source-1"])],
+            )
+
+    class SafeResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="Archive evidence.", sources=[RetrievedSource(
+                url="https://example.org/archive", title="Archive", excerpt="The archive documents the practice.",
+            )])
+
+    ai = CapturingAI()
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    app.dependency_overrides[get_research_provider] = lambda: SafeResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 200
+    assert ai.seed["spoiler_ceiling"] == "premise_only"
+    assert [concept["name"] for concept in ai.seed["concepts"]] == ["Premise-safe clue"]
 
 
 def test_sidequest_allows_two_items_of_the_same_type(client: TestClient) -> None:

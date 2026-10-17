@@ -21,6 +21,7 @@ class ResearchProvider(Protocol):
     def research(self, item: dict[str, object]) -> ResearchPacket: ...
     def research_problems(self, item: dict[str, object], problems: list[dict[str, object]]) -> ResearchPacket: ...
     def recover_candidate(self, item: dict[str, object], candidate: dict[str, object]) -> ResearchPacket: ...
+    def research_discovery(self, seed: dict[str, object], directions: list[dict[str, object]]) -> ResearchPacket: ...
 
 
 class OpenRouterResearchProvider:
@@ -40,6 +41,10 @@ class OpenRouterResearchProvider:
 
     def recover_candidate(self, item: dict[str, object], candidate: dict[str, object]) -> ResearchPacket:
         synthesis, citations = self.client.research_candidate_evidence(candidate)
+        return ResearchPacket(synthesis=synthesis, sources=[RetrievedSource(**citation) for citation in citations])
+
+    def research_discovery(self, seed: dict[str, object], directions: list[dict[str, object]]) -> ResearchPacket:
+        synthesis, citations = self.client.research_discovery_directions(seed, directions)
         return ResearchPacket(synthesis=synthesis, sources=[RetrievedSource(**citation) for citation in citations])
 
 

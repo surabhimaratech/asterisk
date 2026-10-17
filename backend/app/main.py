@@ -18,6 +18,7 @@ from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, Uniqu
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .ai import AIConfigurationError, AIProviderError, ConceptValidationBatch, EvidenceConceptBatch, EvidenceConceptCandidate, EntityCandidate, OpenRouterClient, ResearchProblem, ResearchProblemBatch, get_ai_client
+from .discovery import DiscoveryResearchRequest, NoDiscoveryError, ResearchedDiscoveryRead, run_researched_discovery
 from .quality import assess_research_problem, candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from .research import ResearchProvider, get_research_provider
 
@@ -2111,6 +2112,50 @@ def update_exploration_invitation(invitation_id: int, data: ExplorationInvitatio
 def list_sidequests(db: Session = Depends(get_db)):
     saved = db.scalars(select(Sidequest).order_by(Sidequest.created_at.desc(), Sidequest.id.desc())).all()
     return [sidequest_read(sidequest, db) for sidequest in saved]
+
+
+@app.post("/api/discoveries/research", response_model=ResearchedDiscoveryRead)
+def research_discovery(
+    data: DiscoveryResearchRequest, db: Session = Depends(get_db),
+    ai: OpenRouterClient = Depends(get_ai_client), research: ResearchProvider = Depends(get_research_provider),
+):
+    item = db.get(CuriosityItem, data.item_id)
+    if item is None:
+        raise HTTPException(404, "Curiosity not found")
+    current_concepts = visible_item_concepts(list(db.scalars(select(ItemConcept).where(
+        ItemConcept.item_id == item.id, ItemConcept.superseded_at.is_(None),
+    ).order_by(ItemConcept.id)).all()), db)
+    scope_order = {"premise_only": 0, "within_progress": 1, "full": 2}
+    ceiling = spoiler_ceiling(item)
+    safe_concepts = [
+        concept for concept in current_concepts
+        if scope_order.get(concept.spoiler_scope or "premise_only", 0) <= scope_order[ceiling]
+    ][:5]
+    concept_payloads: list[dict[str, object]] = []
+    for concept in safe_concepts:
+        source_rows = [] if concept.origin == ConceptOrigin.user_kept.value else db.execute(
+            select(ResearchSource, ConceptSource.support_kind)
+            .join(ConceptSource, ConceptSource.source_id == ResearchSource.id)
+            .where(ConceptSource.concept_id == concept.id, ResearchSource.superseded_at.is_(None))
+            .order_by(ResearchSource.id).limit(2)
+        ).all()
+        concept_payloads.append({
+            "name": concept.name, "classification": concept.concept_classification or "legacy",
+            "explanation": concept.explanation, "mechanism": concept.mechanism,
+            "relationship_evidence": concept.relationship_evidence,
+            "evidence_status": concept.evidence_status or "unverified", "spoiler_scope": concept.spoiler_scope,
+            "sources": [{
+                "source_id": f"seed-source-{source.id}", "url": source.url,
+                "title": source.title, "excerpt": source.excerpt[:900], "support_kind": support_kind,
+            } for source, support_kind in source_rows],
+        })
+    seed = {**item_ai_payload(item), "id": item.id, "concepts": concept_payloads}
+    try:
+        return run_researched_discovery(seed, ai, research)
+    except NoDiscoveryError as exc:
+        raise HTTPException(422, f"No researched discovery yet. {exc}") from exc
+    except (AIConfigurationError, AIProviderError) as exc:
+        raise ai_http_error(exc) from exc
 
 @app.post("/api/sidequests/surprise", response_model=SidequestRead, status_code=201)
 def surprise_me(db: Session = Depends(get_db), ai: OpenRouterClient = Depends(get_ai_client)):
