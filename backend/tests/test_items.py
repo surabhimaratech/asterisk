@@ -8,9 +8,15 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, CritiquedConnection, DiscoveryDirection, DiscoveryDirectionBatch, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ResearchedDiscoveryClaim, ResearchedDiscoveryDraft, SidequestCandidateAssessment, SidequestClaim, ValidatedConcept, WorkUnderstanding, strict_json_schema
+from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, ConsideredDiscoveryFinding, CritiquedConnection, DiscoveryDirection, DiscoveryDirectionBatch, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ResearchedDiscoveryClaim, ResearchedDiscoveryDraft, SidequestCandidateAssessment, SidequestClaim, ValidatedConcept, WorkUnderstanding, strict_json_schema
+from app.discovery import NoDiscoveryError, run_researched_discovery
 from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, ItemConcept, app, concepts_are_semantic_duplicates, configure_application_logging, deduplicate_concept_candidates, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
-from app.prompts import CONNECTION_SYSTEM_PROMPT
+from app.prompts import (
+    CONNECTION_SYSTEM_PROMPT,
+    DISCOVERY_DIRECTION_SYSTEM_PROMPT,
+    DISCOVERY_SYNTHESIS_SYSTEM_PROMPT,
+    discovery_research_input,
+)
 from app.quality import assess_research_problem, candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from app.research import ResearchPacket, RetrievedSource, get_research_provider
 
@@ -45,6 +51,20 @@ def create_item(client: TestClient, **overrides: str):
         **overrides,
     }
     return client.post("/api/items", json=payload)
+
+
+def considered_discovery_finding(
+    finding: str = "A concrete documented finding.", source_ids: list[str] | None = None,
+    *, selected: bool = True, direction_index: int = 0,
+) -> ConsideredDiscoveryFinding:
+    return ConsideredDiscoveryFinding(
+        direction_index=direction_index, finding=finding,
+        specificity="It names a particular documented event, mechanism, object, or outcome.",
+        counterintuitiveness="It complicates an explicit expectation rather than relying on unfamiliarity.",
+        evidence_assessment="The cited excerpt directly supports the stated particular.",
+        curiosity_question="Which primary record would reveal what happened next?",
+        source_ids=["discovery-source-1"] if source_ids is None else source_ids, selected=selected,
+    )
 
 
 def test_default_database_path_is_stable() -> None:
@@ -633,11 +653,15 @@ def test_researched_discovery_is_cited_standalone_and_not_persisted(client: Test
             return DiscoveryDirectionBatch(directions=[
                 DiscoveryDirection(
                     question="How have tide tables served as civic memory?", seed_detail="Journals record recurring tides.",
-                    why_promising="It turns private notation into shared prediction.", search_queries=["history tide tables civic navigation"],
+                    why_promising="It turns private notation into shared prediction.",
+                    discovery_target="A documented port decision or outcome caused by an early published tide table.",
+                    search_queries=["history tide tables civic navigation"],
                 ),
                 DiscoveryDirection(
                     question="Which buildings encode recurring water levels?", seed_detail="The setting is organized by tidal recurrence.",
-                    why_promising="Architecture can make environmental memory visible.", search_queries=["architecture marks historic flood levels"],
+                    why_promising="Architecture can make environmental memory visible.",
+                    discovery_target="A specific building feature that records a historic flood level and changed later decisions.",
+                    search_queries=["architecture marks historic flood levels"],
                 ),
             ])
 
@@ -660,6 +684,8 @@ def test_researched_discovery_is_cited_standalone_and_not_persisted(client: Test
                         claim_type="interpretation", text="A record can become coordination infrastructure.", source_ids=[],
                     ),
                 ],
+                considered_findings=[considered_discovery_finding("Published tide tables became port infrastructure.")],
+                selection_rationale="This was the most concrete source-supported institutional outcome.",
             )
 
     class DiscoveryResearch:
@@ -700,8 +726,8 @@ def test_researched_discovery_returns_no_result_without_credible_sources(client:
     class DirectionAI(FakeAI):
         def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
             return DiscoveryDirectionBatch(directions=[
-                DiscoveryDirection(question="Where are pauses mapped?", why_promising="A traceable practice.", seed_detail="Hesitation.", search_queries=["mapped pauses"]),
-                DiscoveryDirection(question="How do maps record uncertainty?", why_promising="A documented technique.", seed_detail="Uncertain routes.", search_queries=["cartography uncertainty"]),
+                DiscoveryDirection(question="Where are pauses mapped?", why_promising="A traceable practice.", seed_detail="Hesitation.", discovery_target="A map or study that records a pause as data.", search_queries=["mapped pauses"]),
+                DiscoveryDirection(question="How do maps record uncertainty?", why_promising="A documented technique.", seed_detail="Uncertain routes.", discovery_target="A specific cartographic mark invented to show uncertainty.", search_queries=["cartography uncertainty"]),
             ])
 
         def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources):
@@ -726,8 +752,8 @@ def test_researched_discovery_reports_search_failure(client: TestClient) -> None
     class DirectionAI(FakeAI):
         def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
             return DiscoveryDirectionBatch(directions=[
-                DiscoveryDirection(question="How do crews coordinate?", why_promising="Documented cases exist.", seed_detail="Coordination.", search_queries=["crew coordination case"]),
-                DiscoveryDirection(question="Where do local rules fail?", why_promising="Failure reports are searchable.", seed_detail="Local rules.", search_queries=["local rules failure report"]),
+                DiscoveryDirection(question="How do crews coordinate?", why_promising="Documented cases exist.", seed_detail="Coordination.", discovery_target="A specific coordination practice and documented outcome.", search_queries=["crew coordination case"]),
+                DiscoveryDirection(question="Where do local rules fail?", why_promising="Failure reports are searchable.", seed_detail="Local rules.", discovery_target="A failure report identifying a counterintuitive local-rule breakdown.", search_queries=["local rules failure report"]),
             ])
 
     class FailingResearch:
@@ -748,8 +774,8 @@ def test_researched_discovery_rejects_invented_source_attribution(client: TestCl
     class InventedCitationAI(FakeAI):
         def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
             return DiscoveryDirectionBatch(directions=[
-                DiscoveryDirection(question="What did the archive preserve?", why_promising="A documented collection.", seed_detail="The archive.", search_queries=["unusual archive collection"]),
-                DiscoveryDirection(question="Who used the collection?", why_promising="Institutional records may answer it.", seed_detail="Its users.", search_queries=["archive collection users"]),
+                DiscoveryDirection(question="What did the archive preserve?", why_promising="A documented collection.", seed_detail="The archive.", discovery_target="One unusual object preserved by the archive and why it survived.", search_queries=["unusual archive collection"]),
+                DiscoveryDirection(question="Who used the collection?", why_promising="Institutional records may answer it.", seed_detail="Its users.", discovery_target="A documented instance of an unexpected person using the collection.", search_queries=["archive collection users"]),
             ])
 
         def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
@@ -761,6 +787,10 @@ def test_researched_discovery_rejects_invented_source_attribution(client: TestCl
                     claim_type="supported_fact", text="An unsupported factual claim.",
                     source_ids=["discovery-source-99"],
                 )],
+                considered_findings=[considered_discovery_finding(
+                    "An unsupported finding.", ["discovery-source-99"],
+                )],
+                selection_rationale="The invented citation appeared to support it.",
             )
 
     class OneSourceResearch:
@@ -796,8 +826,8 @@ def test_researched_discovery_seed_excludes_concepts_beyond_spoiler_ceiling(clie
         def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
             self.seed = seed
             return DiscoveryDirectionBatch(directions=[
-                DiscoveryDirection(question="What practices echo the premise?", why_promising="A safe lead.", seed_detail="Premise.", search_queries=["premise practice"]),
-                DiscoveryDirection(question="Which archives preserve similar rules?", why_promising="An archival lead.", seed_detail="Premise rule.", search_queries=["archive premise rule"]),
+                DiscoveryDirection(question="What practices echo the premise?", why_promising="A safe lead.", seed_detail="Premise.", discovery_target="A documented practice with one observable consequence.", search_queries=["premise practice"]),
+                DiscoveryDirection(question="Which archives preserve similar rules?", why_promising="An archival lead.", seed_detail="Premise rule.", discovery_target="A specific archival record of the rule being used.", search_queries=["archive premise rule"]),
             ])
 
         def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
@@ -806,6 +836,8 @@ def test_researched_discovery_seed_excludes_concepts_beyond_spoiler_ceiling(clie
                 why_surprising="The practice survived in an unexpected setting.", connection_to_library="The premise supplies the question.",
                 what_remains_uncertain="The source covers one archive.", next_rabbit_hole="Which second archive records it?",
                 claims=[ResearchedDiscoveryClaim(claim_type="supported_fact", text="The archive documents it.", source_ids=["discovery-source-1"])],
+                considered_findings=[considered_discovery_finding("The archive documents the practice.")],
+                selection_rationale="The archive supplied the strongest concrete record.",
             )
 
     class SafeResearch:
@@ -822,6 +854,429 @@ def test_researched_discovery_seed_excludes_concepts_beyond_spoiler_ceiling(clie
     assert response.status_code == 200
     assert ai.seed["spoiler_ceiling"] == "premise_only"
     assert [concept["name"] for concept in ai.seed["concepts"]] == ["Premise-safe clue"]
+
+
+def test_discovery_quality_contract_seeks_particulars_without_keyword_rules() -> None:
+    direction = DiscoveryDirection(
+        question="What failed when the signal was repeated?", why_promising="The exception may expose a mechanism.",
+        seed_detail="A repeated signal.", discovery_target="A documented experiment with an unexpected failure mode.",
+        search_queries=["repeated signal unexpected experiment failure"],
+    )
+    research_input = discovery_research_input({"title": "A seed"}, [direction.model_dump()])
+    synthesis_contract = " ".join(DISCOVERY_SYNTHESIS_SYSTEM_PROMPT.split())
+
+    assert "curiosity hooks" in DISCOVERY_DIRECTION_SYSTEM_PROMPT
+    assert "without presuming that it exists" in DISCOVERY_DIRECTION_SYSTEM_PROMPT
+    assert "particular incidents" in research_input
+    assert "contradict a direction's premise" in research_input
+    assert "Being unfamiliar to the user is not by itself enough" in synthesis_contract
+    assert "return accepted false" in synthesis_contract
+    assert "considered_findings" in synthesis_contract
+    assert "specificity" in synthesis_contract
+    assert "counterintuitiveness" in synthesis_contract
+    assert "Do not favor a candidate because it is closer to the seed's genre" in synthesis_contract
+
+
+def test_researched_discovery_declines_generic_sourced_generalization(client: TestClient) -> None:
+    item_id = create_item(client, title="Project Hail Mary").json()["id"]
+
+    class GenericFindingAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(
+                    question="Did humor ever produce an unexpected outcome in an isolated crew?",
+                    why_promising="A specific incident could reveal more than a broad coping claim.",
+                    seed_detail="Humor during crisis.",
+                    discovery_target="A documented incident or study result where humor changed group behavior unexpectedly.",
+                    search_queries=["isolated crew humor unexpected outcome documented"],
+                ),
+                DiscoveryDirection(
+                    question="When did joking make a crisis worse rather than better?",
+                    why_promising="A counterexample could expose the limits of the familiar claim.",
+                    seed_detail="Humor during crisis.",
+                    discovery_target="A documented counterexample in which humor disrupted trust or coordination.",
+                    search_queries=["crisis humor disrupted trust documented case"],
+                ),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            return ResearchedDiscoveryDraft(
+                accepted=False,
+                rejection_reason="The excerpts support only the familiar generalization that humor can aid coping; they establish no distinctive incident, result, or mechanism.",
+                title="", discovery="", why_surprising="", connection_to_library=None,
+                what_remains_uncertain="", next_rabbit_hole="", claims=[],
+                considered_findings=[considered_discovery_finding(
+                    "Humor can support coping.", selected=False,
+                )],
+                selection_rationale="The only finding was familiar and insufficiently distinctive.",
+            )
+
+    class GenericResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="A review says humor may support coping and social bonding.", sources=[RetrievedSource(
+                url="https://example.org/humor-review", title="Humor and coping review",
+                excerpt="Humor can function as a coping strategy and support social bonding during stress.",
+            )])
+
+    app.dependency_overrides[get_ai_client] = lambda: GenericFindingAI()
+    app.dependency_overrides[get_research_provider] = lambda: GenericResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 422
+    assert "familiar generalization" in response.json()["detail"]
+    assert client.get("/api/sidequests").json() == []
+
+
+def test_researched_discovery_accepts_concrete_finding_unrelated_to_seed_subject(client: TestClient) -> None:
+    item_id = create_item(client, title="Project Hail Mary").json()["id"]
+
+    class OutwardFindingAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(
+                    question="Which color-making recipes depend on a living organism?",
+                    why_promising="A material process may hide an unusual collaboration.", seed_detail="Working with unfamiliar life.",
+                    discovery_target="A documented dye recipe whose color depends on a specific organism and preparation sequence.",
+                    search_queries=["museum lichen dye historical recipe preparation"],
+                ),
+                DiscoveryDirection(
+                    question="Which craft materials change only after a long rest?",
+                    why_promising="Waiting may be an active part of manufacture.", seed_detail="Delayed problem solving.",
+                    discovery_target="A documented craft process in which a resting interval causes a surprising material change.",
+                    search_queries=["traditional craft resting period material transformation"],
+                ),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            return ResearchedDiscoveryDraft(
+                accepted=True, rejection_reason="", title="A purple dye that develops in the dark",
+                discovery="A museum record describes a lichen dye preparation sealed away for weeks before it develops its color.",
+                why_surprising="The waiting period is part of making the color, not merely storage after the work is done.",
+                connection_to_library=None,
+                what_remains_uncertain="The excerpt does not establish how consistently historical dyers used this exact preparation.",
+                next_rabbit_hole="Compare the museum's recipe with surviving dye notebooks from a named textile archive.",
+                claims=[ResearchedDiscoveryClaim(
+                    claim_type="supported_fact",
+                    text="The documented preparation seals lichen mixture away for weeks before the purple develops.",
+                    source_ids=["discovery-source-1"],
+                )],
+                considered_findings=[considered_discovery_finding(
+                    "A lichen dye develops only after a sealed resting period.",
+                )],
+                selection_rationale="The specific material transformation was directly documented and counterintuitive.",
+            )
+
+    class DyeResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="A museum recipe records a delayed lichen-dye process.", sources=[RetrievedSource(
+                url="https://example.org/museum/lichen-dye", title="Museum lichen dye record",
+                excerpt="The preparation was sealed and left for several weeks before the purple color developed.",
+            )])
+
+    app.dependency_overrides[get_ai_client] = lambda: OutwardFindingAI()
+    app.dependency_overrides[get_research_provider] = lambda: DyeResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "A purple dye that develops in the dark"
+    assert response.json()["connection_to_library"] is None
+    assert response.json()["evidence"][0]["source_id"] == "discovery-source-1"
+
+
+def test_researched_discovery_does_not_invent_a_particular_when_evidence_is_insufficient(client: TestClient) -> None:
+    item_id = create_item(client, kind="thought", title="A clock that remembers weather").json()["id"]
+
+    class InsufficientEvidenceAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(
+                    question="Did any public clock record weather rather than time?",
+                    why_promising="A surviving instrument would be a concrete contradiction.", seed_detail="A weather-memory clock.",
+                    discovery_target="A named clock or instrument that visibly accumulated a weather record.",
+                    search_queries=["museum clock instrument records weather history"],
+                ),
+                DiscoveryDirection(
+                    question="Which instruments preserve yesterday's atmosphere mechanically?",
+                    why_promising="A mechanism may turn memory into a physical trace.", seed_detail="Remembering weather.",
+                    discovery_target="A documented mechanical instrument and the physical trace it preserves.",
+                    search_queries=["mechanical instrument preserves weather trace museum"],
+                ),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            assert sources[0]["excerpt"] == "The collection includes instruments used to observe weather."
+            return ResearchedDiscoveryDraft(
+                accepted=False,
+                rejection_reason="The source mentions weather instruments but does not establish a named object, recording mechanism, or surprising outcome.",
+                title="", discovery="", why_surprising="", connection_to_library=None,
+                what_remains_uncertain="", next_rabbit_hole="", claims=[],
+                considered_findings=[considered_discovery_finding(
+                    "A museum collection contains weather instruments.", selected=False,
+                )],
+                selection_rationale="The excerpt did not establish a specific object, mechanism, or outcome.",
+            )
+
+    class ThinResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="Only collection-level background was found.", sources=[RetrievedSource(
+                url="https://example.org/museum/weather", title="Weather instruments collection",
+                excerpt="The collection includes instruments used to observe weather.",
+            )])
+
+    app.dependency_overrides[get_ai_client] = lambda: InsufficientEvidenceAI()
+    app.dependency_overrides[get_research_provider] = lambda: ThinResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 422
+    assert "does not establish a named object" in response.json()["detail"]
+
+
+def test_synthesis_can_select_lenape_case_over_generic_humor_regardless_of_source_order(client: TestClient) -> None:
+    item_id = create_item(client, title="Project Hail Mary").json()["id"]
+
+    class LiveTraceAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(
+                    question="What has humor changed during a space mission?", why_promising="Mission records may contain an incident.",
+                    seed_detail="Humor under pressure.", discovery_target="A documented mission incident with an observable outcome.",
+                    search_queries=["space mission humor documented incident outcome"],
+                ),
+                DiscoveryDirection(
+                    question="When has selective breeding made a crop more dangerous?", why_promising="A reversal may be documented.",
+                    seed_detail="Selective breeding under crisis.", discovery_target="A named crop bred for one trait and withdrawn after a dangerous consequence.",
+                    search_queries=["selective breeding crop withdrawn dangerous compound case"],
+                ),
+                DiscoveryDirection(
+                    question="Which cooperation rules fail between species?", why_promising="A concrete case may expose a hidden tradeoff.",
+                    seed_detail="Interspecies cooperation.", discovery_target="A documented interspecies practice with a counterintuitive ethical consequence.",
+                    search_queries=["interspecies cooperation documented ethical conflict case"],
+                ),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            assert len(sources) == 6
+            return ResearchedDiscoveryDraft(
+                accepted=True, rejection_reason="", title="The potato bred into a safety warning",
+                discovery="The Lenape potato was commercially released after selective breeding, then withdrawn after tests found dangerously elevated solanine.",
+                why_surprising="Breeding for a useful commercial crop produced a named variety whose natural defense chemistry made it unsafe.",
+                connection_to_library=None,
+                what_remains_uncertain="The excerpt does not isolate which selected trait caused the elevated solanine.",
+                next_rabbit_hole="Trace the Lenape breeding records to learn which parent lines carried the high-solanine risk.",
+                claims=[ResearchedDiscoveryClaim(
+                    claim_type="supported_fact",
+                    text="The Lenape potato was withdrawn after dangerously elevated solanine was detected.",
+                    source_ids=["discovery-source-6"],
+                )],
+                considered_findings=[
+                    ConsideredDiscoveryFinding(
+                        direction_index=0, finding="Astronauts use humor to cope with stress.",
+                        specificity="The excerpt gives a broad coping pattern rather than a particular outcome.",
+                        counterintuitiveness="The claim is familiar and does not complicate an expectation.",
+                        evidence_assessment="The astronaut source supports the broad pattern.",
+                        curiosity_question="Did a joke ever measurably alter a mission decision?",
+                        source_ids=["discovery-source-1"], selected=False,
+                    ),
+                    ConsideredDiscoveryFinding(
+                        direction_index=1, finding="The Lenape potato was released and then withdrawn for elevated solanine.",
+                        specificity="It names a crop, commercial release, chemical hazard, and withdrawal.",
+                        counterintuitiveness="Selection intended to improve a crop produced a dangerous commercial outcome.",
+                        evidence_assessment="The NIH excerpt directly reports the release, elevated solanine, and withdrawal.",
+                        curiosity_question="Which parent line introduced the chemical risk?",
+                        source_ids=["discovery-source-6"], selected=True,
+                    ),
+                    ConsideredDiscoveryFinding(
+                        direction_index=1, finding="Genetic uniformity increased potato-crop vulnerability to blight.",
+                        specificity="It identifies a population structure and a documented disease vulnerability.",
+                        counterintuitiveness="Agricultural consistency can amplify systemic fragility.",
+                        evidence_assessment="The Berkeley excerpt supports the vulnerability mechanism.",
+                        curiosity_question="Which modern crops retain the same uniformity risk?",
+                        source_ids=["discovery-source-2"], selected=False,
+                    ),
+                ],
+                selection_rationale="The Lenape case is the most concrete counterintuitive outcome and has direct evidence; humor is supported but generic.",
+            )
+
+    class LiveTraceResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="Six results covered all three directions.", sources=[
+                RetrievedSource(url="https://example.org/space-humor", title="Humor in spaceflight", excerpt="Astronauts reported humor as one way of coping with stress."),
+                RetrievedSource(url="https://example.org/berkeley-blight", title="Uniform crops and blight", excerpt="Genetic uniformity left potato crops vulnerable to widespread blight."),
+                RetrievedSource(url="https://example.org/cooperation-one", title="Cooperation case one", excerpt="One documented practice involved cooperation across species."),
+                RetrievedSource(url="https://example.org/cooperation-two", title="Cooperation case two", excerpt="A second source discussed an ethical tension."),
+                RetrievedSource(url="https://example.org/space-history", title="Space mission history", excerpt="Mission crews developed informal social practices."),
+                RetrievedSource(url="https://example.org/nih-lenape", title="The Lenape potato case", excerpt="Lenape was commercially released and later withdrawn after dangerously elevated solanine was found."),
+            ])
+
+    app.dependency_overrides[get_ai_client] = lambda: LiveTraceAI()
+    app.dependency_overrides[get_research_provider] = lambda: LiveTraceResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "The potato bred into a safety warning"
+    assert response.json()["connection_to_library"] is None
+    assert [source["source_id"] for source in response.json()["evidence"]] == ["discovery-source-6"]
+
+
+def test_synthesis_rejects_selected_finding_without_direct_source_support(client: TestClient) -> None:
+    item_id = create_item(client, title="Project Hail Mary").json()["id"]
+
+    class UnsupportedWinnerAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(question="Which result reversed expectations?", why_promising="A reversal may be documented.", seed_detail="A reversal.", discovery_target="A named unexpected result.", search_queries=["named unexpected result"]),
+                DiscoveryDirection(question="Which object was withdrawn?", why_promising="A withdrawal leaves records.", seed_detail="A safety failure.", discovery_target="A named object withdrawn for a documented reason.", search_queries=["product withdrawn documented reason"]),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            return ResearchedDiscoveryDraft(
+                accepted=True, rejection_reason="", title="An unsupported specific story",
+                discovery="A named object was supposedly withdrawn after an unusual reaction.",
+                why_surprising="The reaction would be unexpected if established.", connection_to_library=None,
+                what_remains_uncertain="The source does not establish the story.", next_rabbit_hole="Find a primary withdrawal record.",
+                claims=[ResearchedDiscoveryClaim(
+                    claim_type="supported_fact", text="The retrieved overview discusses product safety generally.",
+                    source_ids=["discovery-source-1"],
+                )],
+                considered_findings=[considered_discovery_finding(
+                    "A named object was withdrawn after an unusual reaction.", source_ids=[], selected=True,
+                )],
+                selection_rationale="The story sounded specific, but it lacked direct retrieved evidence.",
+            )
+
+    class ThinWinnerResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="Only a general safety overview was retrieved.", sources=[RetrievedSource(
+                url="https://example.org/safety", title="Safety overview",
+                excerpt="Product safety processes can include withdrawal after hazards are identified.",
+            )])
+
+    app.dependency_overrides[get_ai_client] = lambda: UnsupportedWinnerAI()
+    app.dependency_overrides[get_research_provider] = lambda: ThinWinnerResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 422
+    assert "selected finding had no retrieved evidence" in response.json()["detail"]
+
+
+def test_discovery_diagnostics_are_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.delenv("DISCOVERY_DEBUG", raising=False)
+    caplog.set_level(logging.INFO, logger="app.main")
+
+    class DiagnosticAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(
+                    question="What did the instrument preserve?", why_promising="A physical trace may survive.",
+                    seed_detail="Remembered weather.", discovery_target="A named instrument and its surviving trace.",
+                    search_queries=["museum instrument weather trace"],
+                ),
+                DiscoveryDirection(
+                    question="Which observation became an object?", why_promising="A record may become material.",
+                    seed_detail="Memory made physical.", discovery_target="A specific record embodied in a physical mechanism.",
+                    search_queries=["physical mechanism records weather history"],
+                ),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            return ResearchedDiscoveryDraft(
+                accepted=True, rejection_reason="", title="A recorded trace",
+                discovery="A museum instrument preserved a weather trace.", why_surprising="The observation became physical.",
+                connection_to_library=None, what_remains_uncertain="The excerpt covers one instrument.",
+                next_rabbit_hole="Inspect the museum catalog entry.", claims=[ResearchedDiscoveryClaim(
+                    claim_type="supported_fact", text="The instrument preserved a trace.",
+                    source_ids=["discovery-source-1"],
+                )],
+                considered_findings=[considered_discovery_finding("A museum instrument preserved a weather trace.")],
+                selection_rationale="The physical trace was the strongest documented particular.",
+            )
+
+    class DiagnosticResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="One instrument was documented.", sources=[RetrievedSource(
+                url="https://example.org/instrument", title="Instrument catalog",
+                excerpt="The instrument preserved a trace.",
+            )])
+
+    run_researched_discovery(
+        {"id": 1, "title": "A clock that remembers weather", "note": "private note", "concepts": []},
+        DiagnosticAI(), DiagnosticResearch(),
+    )
+
+    assert "discovery_debug" not in caplog.text
+
+
+def test_discovery_diagnostics_capture_stages_and_redact_sensitive_fields(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("DISCOVERY_DEBUG", "1")
+    caplog.set_level(logging.INFO, logger="app.main")
+    exposed_key = "sk-" + "or-v1-" + "EXAMPLESECRET123456"
+    private_note = "PRIVATE NOTE MUST NOT APPEAR"
+
+    class DiagnosticAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(
+                    question="Which archive records the contradiction?", why_promising=f"Authorization: Bearer {exposed_key}",
+                    seed_detail="A concrete contradiction.", discovery_target="A named archival incident and its outcome.",
+                    search_queries=[f"archive contradiction api_key={exposed_key}"],
+                ),
+                DiscoveryDirection(
+                    question="What result overturned the expectation?", why_promising="A result may survive in a report.",
+                    seed_detail="An overturned expectation.", discovery_target="A documented result that contradicted the researchers' expectation.",
+                    search_queries=["documented unexpected experimental result"],
+                ),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            return ResearchedDiscoveryDraft(
+                accepted=False, rejection_reason="Only a broad overview was retrieved.", title="No finding",
+                discovery="No distinctive result was established.", why_surprising="",
+                connection_to_library=f"api_key={exposed_key}", what_remains_uncertain="The particular is missing.",
+                next_rabbit_hole="Search the named archive.", claims=[ResearchedDiscoveryClaim(
+                    claim_type="interpretation", text="The overview hints at a contradiction.", source_ids=[],
+                )],
+                considered_findings=[considered_discovery_finding(
+                    "The overview hints at a contradiction.", selected=False,
+                )],
+                selection_rationale=f"No candidate had direct support. api_key={exposed_key}",
+            )
+
+    class DiagnosticResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="Broad background only.", sources=[RetrievedSource(
+                url="https://user:password@example.org/archive/item?token=secret#private",
+                title="Archive overview", excerpt=("bounded evidence " * 45) + exposed_key + " TAIL_SENTINEL",
+            )])
+
+    with pytest.raises(NoDiscoveryError, match="broad overview"):
+        run_researched_discovery(
+            {
+                "id": 1, "title": "Diagnostic seed", "note": private_note,
+                "concepts": [{"name": f"A concept containing {exposed_key}"}],
+            },
+            DiagnosticAI(), DiagnosticResearch(),
+        )
+
+    output = caplog.text
+    for stage in ("seed", "directions", "research_request", "sources", "synthesis", "outcome"):
+        assert f'"stage": "{stage}"' in output
+    assert '"submitted_search_queries"' in output
+    assert '"provider_executed_queries": null' in output
+    assert '"considered_findings"' in output
+    assert '"selection_rationale"' in output
+    assert '"outcome": "no_discovery"' in output
+    assert "Only a broad overview was retrieved." in output
+    assert "https://example.org/archive/item" in output
+    assert "[redacted]" in output
+    assert exposed_key not in output
+    assert private_note not in output
+    assert "user:password" not in output
+    assert "token=secret" not in output
+    assert "TAIL_SENTINEL" not in output
 
 
 def test_sidequest_allows_two_items_of_the_same_type(client: TestClient) -> None:

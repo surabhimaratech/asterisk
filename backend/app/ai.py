@@ -308,6 +308,13 @@ class DiscoveryDirection(BaseModel):
     question: str = Field(min_length=1, max_length=400)
     why_promising: str = Field(min_length=1, max_length=600)
     seed_detail: str = Field(min_length=1, max_length=500)
+    discovery_target: str = Field(
+        min_length=1, max_length=600,
+        description=(
+            "The concrete incident, experiment, mechanism, practice, object, or documented outcome "
+            "the search should try to find, without assuming that it exists."
+        ),
+    )
     search_queries: list[str] = Field(min_length=1, max_length=1)
 
 
@@ -323,17 +330,39 @@ class ResearchedDiscoveryClaim(BaseModel):
     source_ids: list[str] = Field(default_factory=list, max_length=4)
 
 
+class ConsideredDiscoveryFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    direction_index: int = Field(ge=0, le=2)
+    finding: str = Field(min_length=1, max_length=700)
+    specificity: str = Field(min_length=1, max_length=400)
+    counterintuitiveness: str = Field(min_length=1, max_length=400)
+    evidence_assessment: str = Field(min_length=1, max_length=500)
+    curiosity_question: str = Field(min_length=1, max_length=400)
+    source_ids: list[str] = Field(default_factory=list, max_length=4)
+    selected: bool
+
+
 class ResearchedDiscoveryDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    accepted: bool
+    accepted: bool = Field(
+        description="True only when retrieved evidence establishes a concrete, distinctive finding; unfamiliarity alone is insufficient."
+    )
     rejection_reason: str = Field(max_length=500)
     title: str = Field(max_length=180)
-    discovery: str = Field(max_length=1800)
-    why_surprising: str = Field(max_length=1000)
+    discovery: str = Field(
+        max_length=1800,
+        description="Lead with the particular incident, observation, experiment, mechanism, outcome, artifact, or practice found.",
+    )
+    why_surprising: str = Field(
+        max_length=1000,
+        description="Explain the expectation this finding complicates; do not equate unfamiliarity with surprise.",
+    )
     connection_to_library: str | None = Field(max_length=900)
     what_remains_uncertain: str = Field(max_length=900)
     next_rabbit_hole: str = Field(max_length=500)
     claims: list[ResearchedDiscoveryClaim] = Field(max_length=10)
+    considered_findings: list[ConsideredDiscoveryFinding] = Field(min_length=1, max_length=6)
+    selection_rationale: str = Field(min_length=1, max_length=900)
 
 
 class CritiquedConnection(BaseModel):
