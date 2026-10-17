@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App, ConceptExplorer, DiscoveryCard, ItemCard, RejectedFindingCard, ResearchSidequestBeta, SidequestsView } from './main'
 
@@ -200,10 +200,14 @@ describe('Sidequest preparation', () => {
 })
 
 describe('Discovery Engine beta', () => {
-  it('lets the user choose one seed and renders a cited standalone discovery', async () => {
+  it('explores, dismisses, and session-saves cited discovery candidates without more requests', async () => {
     const item = { id: 9, kind: 'book' as const, title: 'Piranesi', note: 'Tides and journals', url: null, creator: null, release_year: null, work_scope: 'individual' as const, parent_work_title: null, canonical_identity_id: null, progress_status: 'finished' as const, progress_current: null, progress_total: null, progress_unit: 'book' as const, spoiler_policy: 'full' as const, created_at: new Date().toISOString() }
     const result = {
-      seed_item_id: 9, seed_title: 'Piranesi', directions: [], title: 'When tide tables became infrastructure',
+      seed_item_id: 9, seed_title: 'Piranesi', directions: [], suggested_candidate_id: 'tides',
+      discovery_candidates: [
+        { candidate_id: 'tides', hook: 'When tide tables became port infrastructure', story: 'Observers published recurring water levels as tables. Harbor workers could then coordinate around a prediction shared by strangers.', twist: 'A private notebook practice became public infrastructure.', library_connection: null, research_direction: 'How did tide tables change ports?', originating_curiosity: 'Journals record recurring tides.', evidence_assessment: 'The archive directly supports publication and use.', go_deeper: 'Which port published the first public table?', ai_suggested: true, evidence: [{ source_id: 'discovery-source-1', url: 'https://example.org/tides', title: 'Tide archive', excerpt: 'Ports published tables for navigation.' }] },
+        { candidate_id: 'flood-mark', hook: 'The flood a building refused to forget', story: 'A flood mark was retained when a building was renovated. The rebuilt surface still carries the height of one city-changing event.', twist: 'Renovation preserved damage as a public warning instead of erasing it.', library_connection: 'Piranesi also turns architecture into a keeper of memory.', research_direction: 'Which buildings encode water levels?', originating_curiosity: 'The halls remember recurring water.', evidence_assessment: 'The city archive identifies the mark and flood.', go_deeper: 'Who decided to preserve the mark?', ai_suggested: false, evidence: [{ source_id: 'discovery-source-2', url: 'https://example.org/flood', title: 'City flood archive', excerpt: 'The flood mark was retained during renovation.' }] },
+      ], title: 'When tide tables became infrastructure',
       discovery: 'Published observations helped ports predict recurring water levels.', why_surprising: 'A notebook-like practice coordinated strangers.',
       connection_to_library: null, what_remains_uncertain: 'Adoption varied by port.', next_rabbit_hole: 'Which port published the first public table?',
       claims: [{ claim_type: 'supported_fact', text: 'Ports published tide tables.', source_ids: ['discovery-source-1'] }],
@@ -218,11 +222,30 @@ describe('Discovery Engine beta', () => {
     fireEvent.click(screen.getByRole('button', { name: '✦ Research a Sidequest' }))
 
     expect(await screen.findByText('When tide tables became infrastructure')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Tide archive ↗' })).toHaveAttribute('href', 'https://example.org/tides')
+    expect(screen.getAllByRole('link', { name: 'Tide archive ↗' })[0]).toHaveAttribute('href', 'https://example.org/tides')
+    expect(screen.getByText('✦ ASTERISK’S SUGGESTED PICK')).toBeInTheDocument()
+    const floodCard = screen.getByText('The flood a building refused to forget').closest('article')!
+    fireEvent.click(within(floodCard).getByRole('button', { name: 'Explore' }))
+    expect(within(floodCard).getByText('Who decided to preserve the mark?')).toBeInTheDocument()
+    expect(within(floodCard).getByText('Piranesi also turns architecture into a keeper of memory.')).toBeInTheDocument()
+    expect(within(floodCard).getByText('Which buildings encode water levels?')).not.toBeVisible()
+    fireEvent.click(within(floodCard).getByText('Sources & details'))
+    expect(within(floodCard).getByText('Which buildings encode water levels?')).toBeVisible()
+    expect(within(floodCard).getAllByRole('link', { name: 'City flood archive ↗' })[0]).toHaveAttribute('href', 'https://example.org/flood')
+    fireEvent.click(within(floodCard).getByRole('button', { name: 'Save for later' }))
+    expect(screen.getByText('SAVED FOR THIS SESSION')).toBeInTheDocument()
+    fireEvent.click(within(floodCard).getByRole('button', { name: 'Not interested' }))
+    expect(screen.getByText('1 of 2 showing')).toBeInTheDocument()
+    const tideCard = screen.getAllByText('When tide tables became port infrastructure')
+      .map(element => element.closest('article')).find(article => article?.classList.contains('discovery-candidate-card'))!
+    fireEvent.click(within(tideCard).getByRole('button', { name: 'Not interested' }))
+    expect(screen.getByText('All findings hidden for this run.')).toBeInTheDocument()
+    expect(screen.queryByText('When tide tables became infrastructure')).not.toBeInTheDocument()
     expect(screen.queryByText('Connection to my library')).not.toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith('/api/discoveries/research', expect.objectContaining({
       method: 'POST', body: JSON.stringify({ item_id: 9 }),
     }))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
 

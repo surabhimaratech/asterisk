@@ -18,7 +18,9 @@ type IdentityCandidate = { candidate_id: string; title: string; creator: string;
 type Enrichment = { status: 'not_researched' | 'researched' | 'needs_confirmation'; resolved_title: string | null; creator: string | null; release_info: string | null; identity_summary: string | null; confirmation_question: string | null; identity_status: 'unresolved' | 'ambiguous' | 'confirmed' | 'not_applicable'; identity_key: string | null; resolved_media_type: Kind | null; resolved_work_scope: WorkScope | null; parent_work_title: string | null; canonical_identity_id: string | null; identity_confidence: number | null; identity_candidates: IdentityCandidate[]; identity_sources: FindingSource[]; confirmed_at: string | null; researched_at: string | null; sources: ResearchSource[]; concepts: ItemConcept[]; rejected_leads: RejectedFinding[] }
 type SidequestClaim = { claim_type: 'supported_fact' | 'interpretation' | 'speculative_hypothesis'; text: string; source_ids: string[] }
 type Sidequest = { id: number; item_a_id: number; item_b_id: number; item_a_title: string; item_b_title: string; title: string; connection: string; bridge: string; why_interesting: string; where_it_breaks: string; new_question: string; evidence_status: string; concepts_used: string[]; evidence: string[]; origin_item_ids: number[]; origin_titles: string[]; discovery_kind: string; invitation: string; detective_version?: number; clue?: { text: string; item_id: number; concept_names: string[]; source_ids: string[] } | null; lead?: { text: string; kind: 'library_item' | 'unfamiliar_subject'; category?: string; source_ids: string[] } | null; reasoning_steps?: string[]; claims?: SidequestClaim[]; created_at: string }
-type ResearchDiscovery = { seed_item_id: number; seed_title: string; directions: { question: string; why_promising: string; seed_detail: string; search_queries: string[] }[]; title: string; discovery: string; why_surprising: string; connection_to_library: string | null; what_remains_uncertain: string; next_rabbit_hole: string; claims: { claim_type: 'supported_fact' | 'interpretation' | 'speculation'; text: string; source_ids: string[] }[]; evidence: { source_id: string; url: string; title: string; excerpt: string }[]; evidence_status: string; persisted: boolean }
+type DiscoverySource = { source_id: string; url: string; title: string; excerpt: string }
+type ResearchDiscoveryCandidate = { candidate_id: string; hook: string; story: string; twist: string; library_connection: string | null; research_direction: string; originating_curiosity: string; evidence_assessment: string; go_deeper: string; ai_suggested: boolean; evidence: DiscoverySource[] }
+type ResearchDiscovery = { seed_item_id: number; seed_title: string; directions: { question: string; why_promising: string; seed_detail: string; discovery_target: string; search_queries: string[] }[]; discovery_candidates: ResearchDiscoveryCandidate[]; suggested_candidate_id: string | null; title: string | null; discovery: string | null; why_surprising: string | null; connection_to_library: string | null; what_remains_uncertain: string | null; next_rabbit_hole: string | null; claims: { claim_type: 'supported_fact' | 'interpretation' | 'speculation'; text: string; source_ids: string[] }[]; evidence: DiscoverySource[]; evidence_status: string; persisted: boolean }
 type ExplorationInvitation = { id: number; item_id: number; item_title: string; source_concept_id: number | null; active_concept_id: number | null; source_concept_name: string; question: string; status: 'queued' | 'dismissed'; user_note: string | null; available: boolean; created_at: string; updated_at: string }
 
 const kinds: Kind[] = ['book', 'movie', 'tv_series', 'podcast', 'article', 'concept', 'question', 'thought']
@@ -762,12 +764,17 @@ export function ResearchSidequestBeta({ items }: { items: Item[] }) {
   const [result, setResult] = useState<ResearchDiscovery | null>(null)
   const [outcome, setOutcome] = useState('')
   const [busy, setBusy] = useState(false)
+  const [expandedCandidate, setExpandedCandidate] = useState<string | null>(null)
+  const [hiddenCandidates, setHiddenCandidates] = useState<Set<string>>(new Set())
+  const [savedCandidates, setSavedCandidates] = useState<ResearchDiscoveryCandidate[]>([])
 
   async function research() {
     if (!seedId) return
     setBusy(true)
     setResult(null)
     setOutcome('')
+    setExpandedCandidate(null)
+    setHiddenCandidates(new Set())
     try {
       const response = await fetch('/api/discoveries/research', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -782,12 +789,40 @@ export function ResearchSidequestBeta({ items }: { items: Item[] }) {
     }
   }
 
+  function dismissCandidate(candidateId: string) {
+    setHiddenCandidates(current => new Set(current).add(candidateId))
+    if (expandedCandidate === candidateId) setExpandedCandidate(null)
+  }
+
+  function toggleSaved(candidate: ResearchDiscoveryCandidate) {
+    setSavedCandidates(current => current.some(saved => saved.candidate_id === candidate.candidate_id)
+      ? current.filter(saved => saved.candidate_id !== candidate.candidate_id)
+      : [...current, candidate])
+  }
+
+  const visibleCandidates = result?.discovery_candidates.filter(candidate => !hiddenCandidates.has(candidate.candidate_id)) || []
+
   return <section className="research-sidequest-beta" aria-labelledby="research-sidequest-title">
-    <div className="beta-heading"><div><span>EXPERIMENT · DISCOVERY ENGINE v0.1</span><h2 id="research-sidequest-title">Research a Sidequest <small>Beta</small></h2><p>Choose one curiosity. Asterisk will follow several leads into real sources and return one discovery worth learning on its own.</p></div></div>
+    <div className="beta-heading"><div><span>EXPERIMENT · DISCOVERY ENGINE v0.4</span><h2 id="research-sidequest-title">Little Discoveries <small>Beta</small></h2><p>Choose one curiosity. Asterisk will follow several leads into real sources and bring back a few small stories worth wandering into.</p></div></div>
     <div className="beta-controls"><label htmlFor="research-seed">Start with</label><select id="research-seed" value={seedId} onChange={event => setSeedId(event.target.value)}><option value="">Choose a curiosity…</option>{items.map(item => <option value={item.id} key={item.id}>{labels[item.kind]} · {item.title}</option>)}</select><button type="button" disabled={!seedId || busy} onClick={() => void research()}>{busy ? '✦ Researching…' : '✦ Research a Sidequest'}</button></div>
     <p className="beta-note">This experiment uses bounded external search and is not added to your saved Sidequests.</p>
     {outcome && <div className="beta-outcome" role="status"><strong>No researched discovery yet.</strong><p>{outcome.replace(/^No researched discovery yet\.\s*/, '')}</p></div>}
-    {result && <article className="researched-discovery-card">
+    {result && <div className="discovery-candidate-collection"><div className="candidate-collection-heading"><div><span>EXPLORE THE STORIES</span><h3>Which one catches you?</h3></div><small>{visibleCandidates.length} of {result.discovery_candidates.length} showing</small></div>
+      {visibleCandidates.length === 0 ? <div className="all-candidates-dismissed" role="status"><strong>All findings hidden for this run.</strong><p>Research again whenever you want a fresh set of leads.</p></div> : <div className="discovery-candidate-grid">{visibleCandidates.map(candidate => {
+        const expanded = expandedCandidate === candidate.candidate_id
+        const saved = savedCandidates.some(entry => entry.candidate_id === candidate.candidate_id)
+        return <article className={`discovery-candidate-card${candidate.ai_suggested ? ' suggested' : ''}`} key={candidate.candidate_id}>
+          <div className="candidate-label">{candidate.ai_suggested ? '✦ ASTERISK’S SUGGESTED PICK' : 'RESEARCHED FINDING'}</div>
+          <h3>{candidate.hook}</h3><p className="candidate-story">{candidate.story}</p>
+          <p className="candidate-twist"><b>The turn:</b> {candidate.twist}</p>
+          <a className="candidate-source-link" href={candidate.evidence[0].url} target="_blank" rel="noopener noreferrer">{candidate.evidence[0].title} ↗</a>
+          <div className="candidate-actions"><button type="button" onClick={() => setExpandedCandidate(expanded ? null : candidate.candidate_id)}>{expanded ? 'Close' : 'Explore'}</button><button type="button" onClick={() => dismissCandidate(candidate.candidate_id)}>Not interested</button><button type="button" className={saved ? 'saved' : ''} onClick={() => toggleSaved(candidate)}>{saved ? 'Saved ✓' : 'Save for later'}</button></div>
+          {expanded && <div className="candidate-details">{candidate.library_connection && <section><h4>A thread back to your library</h4><p>{candidate.library_connection}</p></section>}<section className="candidate-next"><h4>Go deeper</h4><p>{candidate.go_deeper}</p></section><section className="candidate-evidence-links"><h4>Supporting evidence</h4><p>{candidate.evidence.map((source, index) => <React.Fragment key={source.source_id}>{index > 0 && ' · '}<a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a></React.Fragment>)}</p></section><details className="candidate-research-details"><summary>Sources &amp; details</summary><p className="candidate-origin"><b>Started from:</b> {candidate.originating_curiosity}</p><p className="candidate-origin"><b>Research direction:</b> {candidate.research_direction}</p><section><h4>Evidence check</h4><p>{candidate.evidence_assessment}</p></section><div className="candidate-evidence"><h4>Source excerpts</h4>{candidate.evidence.map(source => <article key={source.source_id}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a><p>{source.excerpt}</p></article>)}</div></details></div>}
+        </article>
+      })}</div>}
+    </div>}
+    {savedCandidates.length > 0 && <aside className="session-saved-discoveries"><div><span>SAVED FOR THIS SESSION</span><small>These disappear when this page is reloaded.</small></div>{savedCandidates.map(candidate => <article key={candidate.candidate_id}><strong>{candidate.hook}</strong><a href={candidate.evidence[0].url} target="_blank" rel="noopener noreferrer">Source ↗</a><button type="button" onClick={() => toggleSaved(candidate)}>Remove</button></article>)}</aside>}
+    {result?.title && result.discovery && result.why_surprising && result.what_remains_uncertain && result.next_rabbit_hole && (!result.suggested_candidate_id || !hiddenCandidates.has(result.suggested_candidate_id)) && <article className="researched-discovery-card">
       <div className="evidence-label">✦ RESEARCH-BACKED BETA · {result.seed_title}</div><h3>{result.title}</h3>
       <section><h4>The discovery</h4><p>{result.discovery}</p></section>
       <div className="researched-discovery-grid"><section><h4>Why it’s surprising</h4><p>{result.why_surprising}</p></section>{result.connection_to_library && <section><h4>Connection to my library</h4><p>{result.connection_to_library}</p></section>}<section><h4>What remains uncertain</h4><p>{result.what_remains_uncertain}</p></section><section><h4>Next rabbit hole</h4><p>{result.next_rabbit_hole}</p></section></div>

@@ -333,11 +333,18 @@ class ResearchedDiscoveryClaim(BaseModel):
 class ConsideredDiscoveryFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
     direction_index: int = Field(ge=0, le=2)
-    finding: str = Field(min_length=1, max_length=700)
-    specificity: str = Field(min_length=1, max_length=400)
-    counterintuitiveness: str = Field(min_length=1, max_length=400)
+    hook: str = Field(min_length=1, max_length=180)
+    story: str = Field(
+        min_length=1, max_length=1200,
+        description="A self-contained two-to-four sentence account of the documented particular.",
+    )
+    twist: str = Field(
+        min_length=1, max_length=500,
+        description="The evidence-grounded turn that makes this particular worth noticing.",
+    )
+    library_connection: str | None = Field(max_length=600)
     evidence_assessment: str = Field(min_length=1, max_length=500)
-    curiosity_question: str = Field(min_length=1, max_length=400)
+    go_deeper: str = Field(min_length=1, max_length=500)
     source_ids: list[str] = Field(default_factory=list, max_length=4)
     selected: bool
 
@@ -361,7 +368,7 @@ class ResearchedDiscoveryDraft(BaseModel):
     what_remains_uncertain: str = Field(max_length=900)
     next_rabbit_hole: str = Field(max_length=500)
     claims: list[ResearchedDiscoveryClaim] = Field(max_length=10)
-    considered_findings: list[ConsideredDiscoveryFinding] = Field(min_length=1, max_length=6)
+    considered_findings: list[ConsideredDiscoveryFinding] = Field(min_length=1, max_length=3)
     selection_rationale: str = Field(min_length=1, max_length=900)
 
 

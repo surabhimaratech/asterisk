@@ -55,14 +55,16 @@ def create_item(client: TestClient, **overrides: str):
 
 def considered_discovery_finding(
     finding: str = "A concrete documented finding.", source_ids: list[str] | None = None,
-    *, selected: bool = True, direction_index: int = 0,
+    *, selected: bool = True, direction_index: int = 0, story: str | None = None,
+    twist: str = "The documented outcome complicates the expectation established by the case.",
+    library_connection: str | None = None,
 ) -> ConsideredDiscoveryFinding:
     return ConsideredDiscoveryFinding(
-        direction_index=direction_index, finding=finding,
-        specificity="It names a particular documented event, mechanism, object, or outcome.",
-        counterintuitiveness="It complicates an explicit expectation rather than relying on unfamiliarity.",
+        direction_index=direction_index, hook=finding,
+        story=story or f"{finding} The retrieved record documents the particular event and its outcome.",
+        twist=twist, library_connection=library_connection,
         evidence_assessment="The cited excerpt directly supports the stated particular.",
-        curiosity_question="Which primary record would reveal what happened next?",
+        go_deeper="Which primary record would reveal what happened next?",
         source_ids=["discovery-source-1"] if source_ids is None else source_ids, selected=selected,
     )
 
@@ -804,7 +806,7 @@ def test_researched_discovery_rejects_invented_source_attribution(client: TestCl
     response = client.post("/api/discoveries/research", json={"item_id": item_id})
 
     assert response.status_code == 422
-    assert "source that was not retrieved" in response.json()["detail"]
+    assert "survived source validation" in response.json()["detail"]
     assert client.get("/api/sidequests").json() == []
 
 
@@ -863,10 +865,16 @@ def test_discovery_quality_contract_seeks_particulars_without_keyword_rules() ->
         search_queries=["repeated signal unexpected experiment failure"],
     )
     research_input = discovery_research_input({"title": "A seed"}, [direction.model_dump()])
+    direction_contract = " ".join(DISCOVERY_DIRECTION_SYSTEM_PROMPT.split())
     synthesis_contract = " ".join(DISCOVERY_SYNTHESIS_SYSTEM_PROMPT.split())
 
-    assert "curiosity hooks" in DISCOVERY_DIRECTION_SYSTEM_PROMPT
-    assert "without presuming that it exists" in DISCOVERY_DIRECTION_SYSTEM_PROMPT
+    assert "curiosity hooks" in direction_contract
+    assert "identifiable artifact, record, incident" in direction_contract
+    assert "minimum information a retrieved excerpt would need to contain" in direction_contract
+    assert "focused, case-finding search query" in direction_contract
+    assert "search for a category of documented cases" in direction_contract
+    assert "never invent a name" in direction_contract
+    assert "Adding words such as “interesting” or “surprising”" in direction_contract
     assert "particular incidents" in research_input
     assert "contradict a direction's premise" in research_input
     assert "Being unfamiliar to the user is not by itself enough" in synthesis_contract
@@ -874,6 +882,15 @@ def test_discovery_quality_contract_seeks_particulars_without_keyword_rules() ->
     assert "considered_findings" in synthesis_contract
     assert "specificity" in synthesis_contract
     assert "counterintuitiveness" in synthesis_contract
+    assert "miniature, evidence-backed stories" in synthesis_contract
+    assert "More than one may emerge from the same research direction" in synthesis_contract
+    assert "intriguing title wrapped around an ordinary claim does not qualify" in synthesis_contract
+    assert "Never invent an incident, quotation" in synthesis_contract
+    assert "information actually stated in the retrieved excerpts" in synthesis_contract
+    assert "citation metadata" in synthesis_contract
+    assert "broad topical relevance is not evidence" in synthesis_contract
+    assert "Source IDs establish provenance" in synthesis_contract
+    assert "their presence alone does not establish" in synthesis_contract
     assert "Do not favor a candidate because it is closer to the seed's genre" in synthesis_contract
 
 
@@ -1035,7 +1052,11 @@ def test_synthesis_can_select_lenape_case_over_generic_humor_regardless_of_sourc
     item_id = create_item(client, title="Project Hail Mary").json()["id"]
 
     class LiveTraceAI(FakeAI):
+        direction_calls = 0
+        synthesis_calls = 0
+
         def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            self.direction_calls += 1
             return DiscoveryDirectionBatch(directions=[
                 DiscoveryDirection(
                     question="What has humor changed during a space mission?", why_promising="Mission records may contain an incident.",
@@ -1055,6 +1076,7 @@ def test_synthesis_can_select_lenape_case_over_generic_humor_regardless_of_sourc
             ])
 
         def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            self.synthesis_calls += 1
             assert len(sources) == 6
             return ResearchedDiscoveryDraft(
                 accepted=True, rejection_reason="", title="The potato bred into a safety warning",
@@ -1070,27 +1092,27 @@ def test_synthesis_can_select_lenape_case_over_generic_humor_regardless_of_sourc
                 )],
                 considered_findings=[
                     ConsideredDiscoveryFinding(
-                        direction_index=0, finding="Astronauts use humor to cope with stress.",
-                        specificity="The excerpt gives a broad coping pattern rather than a particular outcome.",
-                        counterintuitiveness="The claim is familiar and does not complicate an expectation.",
+                        direction_index=0, hook="Humor as a pressure valve",
+                        story="Astronauts report using humor to cope with stress. The excerpt offers a broad pattern, not a particular incident or outcome.",
+                        twist="The claim is familiar and does not complicate an expectation.", library_connection=None,
                         evidence_assessment="The astronaut source supports the broad pattern.",
-                        curiosity_question="Did a joke ever measurably alter a mission decision?",
+                        go_deeper="Did a joke ever measurably alter a mission decision?",
                         source_ids=["discovery-source-1"], selected=False,
                     ),
                     ConsideredDiscoveryFinding(
-                        direction_index=1, finding="The Lenape potato was released and then withdrawn for elevated solanine.",
-                        specificity="It names a crop, commercial release, chemical hazard, and withdrawal.",
-                        counterintuitiveness="Selection intended to improve a crop produced a dangerous commercial outcome.",
+                        direction_index=1, hook="The potato bred into a safety warning",
+                        story="The Lenape potato was commercially released after selective breeding. It was later withdrawn when tests found dangerously elevated solanine.",
+                        twist="Selection intended to improve a crop produced a dangerous commercial outcome.", library_connection=None,
                         evidence_assessment="The NIH excerpt directly reports the release, elevated solanine, and withdrawal.",
-                        curiosity_question="Which parent line introduced the chemical risk?",
+                        go_deeper="Which parent line introduced the chemical risk?",
                         source_ids=["discovery-source-6"], selected=True,
                     ),
                     ConsideredDiscoveryFinding(
-                        direction_index=1, finding="Genetic uniformity increased potato-crop vulnerability to blight.",
-                        specificity="It identifies a population structure and a documented disease vulnerability.",
-                        counterintuitiveness="Agricultural consistency can amplify systemic fragility.",
+                        direction_index=1, hook="When uniformity made a crop fragile",
+                        story="Genetic uniformity increased potato-crop vulnerability to blight. A consistent crop population became a shared point of failure.",
+                        twist="Agricultural consistency can amplify systemic fragility.", library_connection=None,
                         evidence_assessment="The Berkeley excerpt supports the vulnerability mechanism.",
-                        curiosity_question="Which modern crops retain the same uniformity risk?",
+                        go_deeper="Which modern crops retain the same uniformity risk?",
                         source_ids=["discovery-source-2"], selected=False,
                     ),
                 ],
@@ -1098,7 +1120,10 @@ def test_synthesis_can_select_lenape_case_over_generic_humor_regardless_of_sourc
             )
 
     class LiveTraceResearch:
+        calls = 0
+
         def research_discovery(self, seed, directions) -> ResearchPacket:
+            self.calls += 1
             return ResearchPacket(synthesis="Six results covered all three directions.", sources=[
                 RetrievedSource(url="https://example.org/space-humor", title="Humor in spaceflight", excerpt="Astronauts reported humor as one way of coping with stress."),
                 RetrievedSource(url="https://example.org/berkeley-blight", title="Uniform crops and blight", excerpt="Genetic uniformity left potato crops vulnerable to widespread blight."),
@@ -1108,14 +1133,29 @@ def test_synthesis_can_select_lenape_case_over_generic_humor_regardless_of_sourc
                 RetrievedSource(url="https://example.org/nih-lenape", title="The Lenape potato case", excerpt="Lenape was commercially released and later withdrawn after dangerously elevated solanine was found."),
             ])
 
-    app.dependency_overrides[get_ai_client] = lambda: LiveTraceAI()
-    app.dependency_overrides[get_research_provider] = lambda: LiveTraceResearch()
+    ai = LiveTraceAI()
+    research = LiveTraceResearch()
+    app.dependency_overrides[get_ai_client] = lambda: ai
+    app.dependency_overrides[get_research_provider] = lambda: research
     response = client.post("/api/discoveries/research", json={"item_id": item_id})
 
     assert response.status_code == 200
     assert response.json()["title"] == "The potato bred into a safety warning"
     assert response.json()["connection_to_library"] is None
     assert [source["source_id"] for source in response.json()["evidence"]] == ["discovery-source-6"]
+    candidates = response.json()["discovery_candidates"]
+    assert len(candidates) == 3
+    selected = next(candidate for candidate in candidates if candidate["ai_suggested"])
+    assert selected["hook"] == "The potato bred into a safety warning"
+    assert "commercially released" in selected["story"]
+    assert "dangerous commercial outcome" in selected["twist"]
+    assert selected["library_connection"] is None
+    assert selected["evidence"][0]["source_id"] == "discovery-source-6"
+    crop_candidates = [candidate for candidate in candidates if candidate["research_direction"] == "When has selective breeding made a crop more dangerous?"]
+    assert len(crop_candidates) == 2  # distinct little stories may come from one productive direction
+    assert response.json()["suggested_candidate_id"] == selected["candidate_id"]
+    assert ai.direction_calls == ai.synthesis_calls == research.calls == 1
+    assert client.get("/api/sidequests").json() == []
 
 
 def test_synthesis_rejects_selected_finding_without_direct_source_support(client: TestClient) -> None:
@@ -1156,7 +1196,95 @@ def test_synthesis_rejects_selected_finding_without_direct_source_support(client
     response = client.post("/api/discoveries/research", json={"item_id": item_id})
 
     assert response.status_code == 422
-    assert "selected finding had no retrieved evidence" in response.json()["detail"]
+    assert "survived source validation" in response.json()["detail"]
+
+
+def test_discovery_candidates_exclude_invalid_selected_finding_but_return_supported_alternative(client: TestClient) -> None:
+    item_id = create_item(client, title="Project Hail Mary").json()["id"]
+
+    class InvalidSelectionAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(question="Which crop failed unexpectedly?", why_promising="A named case may survive.", seed_detail="Selective breeding.", discovery_target="A named crop and documented outcome.", search_queries=["crop breeding unexpected outcome"]),
+                DiscoveryDirection(question="Which mission ritual mattered?", why_promising="Logs may preserve one.", seed_detail="Crew culture.", discovery_target="A named mission ritual with an observed consequence.", search_queries=["mission ritual documented consequence"]),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            return ResearchedDiscoveryDraft(
+                accepted=True, rejection_reason="", title="Unsupported winner", discovery="An unsupported mission story.",
+                why_surprising="It would be surprising if sourced.", connection_to_library=None,
+                what_remains_uncertain="No source establishes it.", next_rabbit_hole="Find a mission log.",
+                claims=[ResearchedDiscoveryClaim(claim_type="supported_fact", text="Unsupported story.", source_ids=["discovery-source-99"])],
+                considered_findings=[
+                    considered_discovery_finding("An unsupported mission story.", ["discovery-source-99"], direction_index=1),
+                    considered_discovery_finding(
+                        "Genetic uniformity left potato crops vulnerable to blight.", ["discovery-source-1"],
+                        selected=False, direction_index=0,
+                    ),
+                ],
+                selection_rationale="The selected story was not actually present in the retrieved evidence.",
+            )
+
+    class AlternativeResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="One supported crop finding.", sources=[RetrievedSource(
+                url="https://example.org/blight", title="Crop uniformity and blight",
+                excerpt="Genetic uniformity left the potato crop vulnerable to widespread blight.",
+            )])
+
+    app.dependency_overrides[get_ai_client] = lambda: InvalidSelectionAI()
+    app.dependency_overrides[get_research_provider] = lambda: AlternativeResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] is None
+    assert body["suggested_candidate_id"] is None
+    assert len(body["discovery_candidates"]) == 1
+    assert body["discovery_candidates"][0]["hook"].startswith("Genetic uniformity")
+    assert body["discovery_candidates"][0]["evidence"][0]["url"] == "https://example.org/blight"
+
+
+def test_discovery_candidates_collapse_paraphrased_duplicates(client: TestClient) -> None:
+    item_id = create_item(client, title="Project Hail Mary").json()["id"]
+
+    class DuplicateCandidateAI(FakeAI):
+        def propose_discovery_directions(self, seed) -> DiscoveryDirectionBatch:
+            return DiscoveryDirectionBatch(directions=[
+                DiscoveryDirection(question="Which bred crop became dangerous?", why_promising="A withdrawal creates records.", seed_detail="Selective breeding.", discovery_target="A crop withdrawn for a chemical hazard.", search_queries=["bred crop withdrawn chemical hazard"]),
+                DiscoveryDirection(question="When did crop uniformity amplify risk?", why_promising="A disease outcome may be documented.", seed_detail="Ecological vulnerability.", discovery_target="A named disease event linked to crop uniformity.", search_queries=["crop uniformity disease vulnerability case"]),
+            ])
+
+        def synthesize_researched_discovery(self, seed, directions, research_synthesis, sources) -> ResearchedDiscoveryDraft:
+            return ResearchedDiscoveryDraft(
+                accepted=True, rejection_reason="", title="The potato bred into a safety warning",
+                discovery="The Lenape potato was withdrawn for dangerously elevated solanine.",
+                why_surprising="Breeding a commercial crop produced a chemical hazard.", connection_to_library=None,
+                what_remains_uncertain="The causal parent line is not established.", next_rabbit_hole="Trace the parent lines.",
+                claims=[ResearchedDiscoveryClaim(claim_type="supported_fact", text="Lenape was withdrawn for elevated solanine.", source_ids=["discovery-source-1"])],
+                considered_findings=[
+                    considered_discovery_finding("The Lenape potato was withdrawn for dangerously elevated solanine.", ["discovery-source-1"]),
+                    considered_discovery_finding("Dangerously elevated solanine: the Lenape potato was withdrawn.", ["discovery-source-1"], selected=False),
+                    considered_discovery_finding("Genetic uniformity left potato crops vulnerable to blight.", ["discovery-source-2"], selected=False, direction_index=1),
+                ],
+                selection_rationale="The Lenape withdrawal was the strongest particular.",
+            )
+
+    class DuplicateResearch:
+        def research_discovery(self, seed, directions) -> ResearchPacket:
+            return ResearchPacket(synthesis="Two supported findings.", sources=[
+                RetrievedSource(url="https://example.org/lenape", title="Lenape case", excerpt="Lenape was withdrawn for elevated solanine."),
+                RetrievedSource(url="https://example.org/blight", title="Blight case", excerpt="Genetic uniformity increased vulnerability to blight."),
+            ])
+
+    app.dependency_overrides[get_ai_client] = lambda: DuplicateCandidateAI()
+    app.dependency_overrides[get_research_provider] = lambda: DuplicateResearch()
+    response = client.post("/api/discoveries/research", json={"item_id": item_id})
+
+    assert response.status_code == 200
+    candidates = response.json()["discovery_candidates"]
+    assert len(candidates) == 2
+    assert sum(candidate["ai_suggested"] for candidate in candidates) == 1
 
 
 def test_discovery_diagnostics_are_disabled_by_default(
