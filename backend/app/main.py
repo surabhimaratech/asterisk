@@ -9,16 +9,18 @@ import os
 import re
 import shutil
 import uuid
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, field_validator
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, delete, inspect, select, or_
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, delete, inspect, select, or_
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .ai import AIConfigurationError, AIProviderError, ConceptValidationBatch, EvidenceConceptBatch, EvidenceConceptCandidate, EntityCandidate, OpenRouterClient, ResearchProblem, ResearchProblemBatch, get_ai_client
-from .discovery import DiscoveryResearchRequest, NoDiscoveryError, ResearchedDiscoveryRead, run_researched_discovery
+from .discovery import DiscoveryResearchRequest, DiscoverySourceRead, NoDiscoveryError, ResearchedDiscoveryRead, run_researched_discovery
 from .quality import assess_research_problem, candidate_evidence_rejection, concept_quality_rejection, deterministic_rejection_reason, rebind_exact_evidence, research_problem_rejection
 from .research import ResearchProvider, get_research_provider
 
@@ -208,6 +210,16 @@ class ExplorationInvitation(Base):
     user_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SavedDiscovery(Base):
+    __tablename__ = "saved_discoveries"
+    candidate_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    hook: Mapped[str] = mapped_column(Text)
+    story: Mapped[str] = mapped_column(Text)
+    go_deeper: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[list[dict[str, str]]] = mapped_column(JSON)
+    saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class Sidequest(Base):
@@ -2112,6 +2124,61 @@ def update_exploration_invitation(invitation_id: int, data: ExplorationInvitatio
 def list_sidequests(db: Session = Depends(get_db)):
     saved = db.scalars(select(Sidequest).order_by(Sidequest.created_at.desc(), Sidequest.id.desc())).all()
     return [sidequest_read(sidequest, db) for sidequest in saved]
+
+
+class SavedDiscoverySource(DiscoverySourceRead):
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        TypeAdapter(AnyHttpUrl).validate_python(value)
+        return value
+
+
+class SavedDiscoveryWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    hook: str
+    story: str
+    go_deeper: str
+    evidence: list[SavedDiscoverySource] = Field(min_length=1)
+
+
+class SavedDiscoveryRead(SavedDiscoveryWrite):
+    model_config = ConfigDict(from_attributes=True)
+    saved_at: datetime
+
+
+@app.get("/api/discoveries/saved", response_model=list[SavedDiscoveryRead])
+def list_saved_discoveries(db: Session = Depends(get_db)):
+    return db.scalars(select(SavedDiscovery).order_by(
+        SavedDiscovery.saved_at.desc(), SavedDiscovery.candidate_id,
+    )).all()
+
+
+@app.post("/api/discoveries/saved", response_model=list[SavedDiscoveryRead])
+def save_discoveries(data: Annotated[list[SavedDiscoveryWrite], Body(min_length=1)], db: Session = Depends(get_db)):
+    for entry in data:
+        values = entry.model_dump()
+        if db.get_bind().dialect.name == "sqlite":
+            db.execute(sqlite_insert(SavedDiscovery).values(**values).on_conflict_do_nothing(
+                index_elements=[SavedDiscovery.candidate_id],
+            ))
+        else:
+            try:
+                with db.begin_nested():
+                    db.add(SavedDiscovery(**values))
+                    db.flush()
+            except IntegrityError:
+                if db.get(SavedDiscovery, entry.candidate_id) is None:
+                    raise
+    db.commit()
+    return list_saved_discoveries(db)
+
+
+@app.delete("/api/discoveries/saved/{candidate_id}", status_code=204)
+def remove_saved_discovery(candidate_id: str, db: Session = Depends(get_db)):
+    db.execute(delete(SavedDiscovery).where(SavedDiscovery.candidate_id == candidate_id))
+    db.commit()
 
 
 @app.post("/api/discoveries/research", response_model=ResearchedDiscoveryRead)

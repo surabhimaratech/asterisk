@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.ai import AIProviderError, CandidateBatch, ConceptExtraction, ConceptValidationBatch, ConsideredDiscoveryFinding, CritiquedConnection, DiscoveryDirection, DiscoveryDirectionBatch, EnrichedConcept, EnrichmentAnalysis, EntityCandidate, EntityResolution, EvidenceConceptBatch, EvidenceConceptCandidate, EvidenceRecoveryResult, EvidenceReference, ExtractedConcept, ConnectionCandidate, ResearchProblem, ResearchProblemBatch, ResearchedDiscoveryClaim, ResearchedDiscoveryDraft, SidequestCandidateAssessment, SidequestClaim, ValidatedConcept, WorkUnderstanding, strict_json_schema
 from app.discovery import NoDiscoveryError, run_researched_discovery
-from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, ItemConcept, app, concepts_are_semantic_duplicates, configure_application_logging, deduplicate_concept_candidates, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
+from app.main import BACKEND_DIR, DATA_DIR, DB_PATH, Base, CanonicalConcept, ItemConcept, SavedDiscovery, app, concepts_are_semantic_duplicates, configure_application_logging, deduplicate_concept_candidates, get_ai_client, get_db, migrate_additive_columns, resolve_canonical_concept, select_diverse_anchors
 from app.prompts import (
     CONNECTION_SYSTEM_PROMPT,
     DISCOVERY_DIRECTION_SYSTEM_PROMPT,
@@ -51,6 +51,63 @@ def create_item(client: TestClient, **overrides: str):
         **overrides,
     }
     return client.post("/api/items", json=payload)
+
+
+def test_saved_discoveries_survive_schema_upgrade_and_database_reopen(tmp_path, monkeypatch):
+    database_url = f"sqlite:///{tmp_path / 'existing.db'}"
+    engine = create_engine(database_url)
+    Base.metadata.create_all(engine, tables=[
+        table for table in Base.metadata.sorted_tables if table is not SavedDiscovery.__table__
+    ])
+    testing_session = sessionmaker()
+
+    def override_get_db():
+        with testing_session() as session:
+            yield session
+
+    def provider_must_not_be_called():
+        pytest.fail("Saved discovery routes must not use research providers")
+
+    monkeypatch.setitem(app.dependency_overrides, get_db, override_get_db)
+    monkeypatch.setitem(app.dependency_overrides, get_ai_client, provider_must_not_be_called)
+    monkeypatch.setitem(app.dependency_overrides, get_research_provider, provider_must_not_be_called)
+    testing_session.configure(bind=engine)
+    with TestClient(app) as client:
+        item = create_item(client).json()
+        Base.metadata.create_all(engine)
+        assert client.get("/api/items").json() == [item]
+        path = "/api/discoveries/saved"
+        snapshot = {
+            "candidate_id": "flood-mark", "hook": "The flood mark",
+            "story": "A building retained a historical flood mark.",
+            "go_deeper": "Who preserved the mark?",
+            "evidence": [{"source_id": "archive", "url": "https://example.org", "title": "Archive", "excerpt": "The mark was retained."}],
+        }
+        invalid = {**snapshot, "evidence": [{**snapshot["evidence"][0], "url": "javascript:alert(1)"}]}
+        assert client.post(path, json=[snapshot, invalid]).status_code == 422
+        assert client.get(path).json() == []
+
+        response = client.post(path, json=[snapshot, snapshot])
+        assert response.status_code == 200
+        saved = response.json()
+        assert len(saved) == 1
+        assert saved[0] == {**snapshot, "saved_at": saved[0]["saved_at"]}
+        assert client.post(path, json=[{**snapshot, "hook": "Duplicate"}]).json() == saved
+        newer = {**snapshot, "candidate_id": "newer"}
+        assert [entry["candidate_id"] for entry in client.post(path, json=[newer]).json()] == ["newer", "flood-mark"]
+        assert client.delete(f"/api/items/{item['id']}").status_code == 204
+
+    engine.dispose()
+    reopened = create_engine(database_url)
+    testing_session.configure(bind=reopened)
+    try:
+        with TestClient(app) as fresh_client:
+            assert fresh_client.get(path).json()[1:] == saved
+            assert fresh_client.delete(f"{path}/flood-mark").status_code == 204
+            assert fresh_client.delete(f"{path}/flood-mark").status_code == 204
+            assert [entry["candidate_id"] for entry in fresh_client.get(path).json()] == ["newer"]
+    finally:
+        reopened.dispose()
 
 
 def considered_discovery_finding(

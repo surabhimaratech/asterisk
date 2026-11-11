@@ -200,7 +200,7 @@ describe('Sidequest preparation', () => {
 })
 
 describe('Discovery Engine beta', () => {
-  it('explores, dismisses, and session-saves cited discovery candidates without more requests', async () => {
+  it('explores, dismisses, saves, and reopens discoveries without repeating research', async () => {
     const item = { id: 9, kind: 'book' as const, title: 'Piranesi', note: 'Tides and journals', url: null, creator: null, release_year: null, work_scope: 'individual' as const, parent_work_title: null, canonical_identity_id: null, progress_status: 'finished' as const, progress_current: null, progress_total: null, progress_unit: 'book' as const, spoiler_policy: 'full' as const, created_at: new Date().toISOString() }
     const result = {
       seed_item_id: 9, seed_title: 'Piranesi', directions: [], suggested_candidate_id: 'tides',
@@ -214,9 +214,24 @@ describe('Discovery Engine beta', () => {
       evidence: [{ source_id: 'discovery-source-1', url: 'https://example.org/tides', title: 'Tide archive', excerpt: 'Ports published tables for navigation.' }],
       evidence_status: 'Research-backed', persisted: false,
     }
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    let stored: unknown[] = []
+    let failSave = true
+    let failRemove = true
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/discoveries/research') return Response.json(result)
+      if (options?.method === 'POST') {
+        if (failSave) return new Response(null, { status: 503 })
+        stored = JSON.parse(String(options.body))
+      }
+      if (options?.method === 'DELETE') {
+        if (failRemove) return new Response(null, { status: 503 })
+        stored = []
+        return new Response(null, { status: 204 })
+      }
+      return Response.json(stored)
+    })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ResearchSidequestBeta items={[item]} />)
+    const { unmount } = render(<ResearchSidequestBeta items={[item]} />)
 
     fireEvent.change(screen.getByLabelText('Start with'), { target: { value: '9' } })
     fireEvent.click(screen.getByRole('button', { name: '✦ Research a Sidequest' }))
@@ -232,12 +247,16 @@ describe('Discovery Engine beta', () => {
     fireEvent.click(within(floodCard).getByText('Sources & details'))
     expect(within(floodCard).getByText('Which buildings encode water levels?')).toBeVisible()
     expect(within(floodCard).getAllByRole('link', { name: 'City flood archive ↗' })[0]).toHaveAttribute('href', 'https://example.org/flood')
-    fireEvent.click(within(floodCard).getByRole('button', { name: 'Save for later' }))
-    expect(screen.getByText('SAVED FOR THIS SESSION')).toBeInTheDocument()
+    const save = within(floodCard).getByRole('button', { name: 'Save for later' })
+    fireEvent.click(save)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save the discovery')
+    expect(screen.queryByRole('complementary', { name: 'Saved discoveries' })).not.toBeInTheDocument()
+    failSave = false
+    fireEvent.click(save)
+    expect(await screen.findByRole('complementary', { name: 'Saved discoveries' })).toBeInTheDocument()
+    const tideCard = screen.getByText('When tide tables became port infrastructure').closest('article')!
     fireEvent.click(within(floodCard).getByRole('button', { name: 'Not interested' }))
     expect(screen.getByText('1 of 2 showing')).toBeInTheDocument()
-    const tideCard = screen.getAllByText('When tide tables became port infrastructure')
-      .map(element => element.closest('article')).find(article => article?.classList.contains('discovery-candidate-card'))!
     fireEvent.click(within(tideCard).getByRole('button', { name: 'Not interested' }))
     expect(screen.getByText('All findings hidden for this run.')).toBeInTheDocument()
     expect(screen.queryByText('When tide tables became infrastructure')).not.toBeInTheDocument()
@@ -245,7 +264,78 @@ describe('Discovery Engine beta', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/discoveries/research', expect.objectContaining({
       method: 'POST', body: JSON.stringify({ item_id: 9 }),
     }))
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    unmount()
+    const restored = render(<ResearchSidequestBeta items={[item]} />)
+    const saved = await screen.findByRole('complementary', { name: 'Saved discoveries' })
+    const requestsBeforeOpen = fetchMock.mock.calls.length
+    expect(within(saved).queryByText('When tide tables became port infrastructure')).not.toBeInTheDocument()
+    const summary = within(saved).getByText('The flood a building refused to forget')
+    expect(within(saved).getByText('Who decided to preserve the mark?')).not.toBeVisible()
+    fireEvent.click(summary)
+    expect(within(saved).getByText('Who decided to preserve the mark?')).toBeVisible()
+    expect(within(saved).getByText(result.discovery_candidates[1].story)).toBeVisible()
+    expect(within(saved).getByRole('link', { name: 'City flood archive ↗' })).toHaveAttribute('href', 'https://example.org/flood')
+    expect(fetchMock).toHaveBeenCalledTimes(requestsBeforeOpen)
+    const remove = within(saved).getByRole('button', { name: /Remove saved discovery/ })
+    fireEvent.click(remove)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not remove the discovery')
+    expect(saved).toBeInTheDocument()
+    failRemove = false
+    fireEvent.click(remove)
+    await waitFor(() => expect(saved).not.toBeInTheDocument())
+    restored.unmount()
+    render(<ResearchSidequestBeta items={[item]} />)
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url, options]) =>
+      url === '/api/discoveries/saved' && !options?.method)).toHaveLength(3))
+    expect(screen.queryByRole('complementary', { name: 'Saved discoveries' })).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/discoveries/research')).toHaveLength(1)
+  })
+
+  it('retries a failed browser import and clears the browser copy after confirmation', async () => {
+    const entry = {
+      candidate_id: 'flood-mark', hook: 'The flood a building refused to forget',
+      story: 'The rebuilt surface still carries the height of the flood.',
+      go_deeper: 'Who decided to preserve the mark?',
+      evidence: [{ source_id: 'archive', url: 'https://example.org/flood', title: 'Archive', excerpt: 'The mark was retained.' }],
+    }
+    const key = 'asterisk.saved-discoveries.v1'
+    const legacy = JSON.stringify([
+      { ...entry, extra: true },
+      { ...entry, candidate_id: 'bad', evidence: [{ ...entry.evidence[0], url: 'https://' }] },
+      null,
+    ])
+    localStorage.setItem(key, legacy)
+    let failImport = true
+    const fetchMock = vi.fn(async (_url: string, options?: RequestInit) => {
+      if (options?.method !== 'POST') return Response.json([])
+      return failImport ? new Response(null, { status: 503 }) : Response.json([entry])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ResearchSidequestBeta items={[]} />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not finish importing browser saves')
+    expect(localStorage.getItem(key)).toBe(legacy)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/discoveries/saved')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual([entry])
+    failImport = false
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('complementary', { name: 'Saved discoveries' })).toBeInTheDocument()
+    expect(localStorage.getItem(key)).toBeNull()
+  })
+
+  it.each(['malformed', 'inaccessible'])('loads SQLite saves when browser data is %s', async problem => {
+    if (problem === 'malformed') localStorage.setItem('asterisk.saved-discoveries.v1', '{broken')
+    else vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('Storage access denied', 'SecurityError')
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json([{
+      candidate_id: 'existing', hook: 'Already in SQLite', story: 'A saved story',
+      go_deeper: 'What happened next?', evidence: [],
+    }])))
+
+    render(<ResearchSidequestBeta items={[]} />)
+    expect(await screen.findByText('Already in SQLite')).toBeInTheDocument()
   })
 })
 

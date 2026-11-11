@@ -760,6 +760,56 @@ export function RejectedFindingCard({ finding, onReview, onReevaluate, onInteres
   </article>
 }
 
+type SavedDiscovery = Pick<ResearchDiscoveryCandidate, 'candidate_id' | 'hook' | 'story' | 'go_deeper' | 'evidence'>
+
+const savedDiscoveriesKey = 'asterisk.saved-discoveries.v1'
+const savedDiscoveriesUrl = '/api/discoveries/saved'
+
+function isHttpUrl(value: unknown): boolean {
+  if (typeof value !== 'string' || !/^https?:\/\//i.test(value)) return false
+  try {
+    return Boolean(new URL(value).hostname)
+  } catch {
+    return false
+  }
+}
+
+function isSavedDiscovery(value: unknown): value is SavedDiscovery {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<SavedDiscovery>
+  return typeof entry.candidate_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(entry.candidate_id)
+    && typeof entry.hook === 'string'
+    && typeof entry.story === 'string' && typeof entry.go_deeper === 'string'
+    && Array.isArray(entry.evidence) && entry.evidence.length > 0
+    && entry.evidence.every(source => source && typeof source.source_id === 'string'
+      && typeof source.title === 'string' && typeof source.excerpt === 'string'
+      && isHttpUrl(source.url))
+}
+
+function discoverySnapshot({ candidate_id, hook, story, go_deeper, evidence }: SavedDiscovery): SavedDiscovery {
+  return {
+    candidate_id, hook, story, go_deeper,
+    evidence: evidence.map(({ source_id, url, title, excerpt }) => ({ source_id, url, title, excerpt })),
+  }
+}
+
+function readBrowserDiscoveries(): SavedDiscovery[] {
+  try {
+    const values: unknown = JSON.parse(window.localStorage.getItem(savedDiscoveriesKey) ?? '[]')
+    return Array.isArray(values) ? values.filter(isSavedDiscovery).map(discoverySnapshot) : []
+  } catch {
+    return []
+  }
+}
+
+async function saveDiscoveries(entries: SavedDiscovery[], signal?: AbortSignal): Promise<SavedDiscovery[]> {
+  const response = await fetch(savedDiscoveriesUrl, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(entries), signal,
+  })
+  if (!response.ok) throw new Error('Could not save discoveries.')
+  return response.json()
+}
+
 export function ResearchSidequestBeta({ items }: { items: Item[] }) {
   const [seedId, setSeedId] = useState('')
   const [result, setResult] = useState<ResearchDiscovery | null>(null)
@@ -767,7 +817,50 @@ export function ResearchSidequestBeta({ items }: { items: Item[] }) {
   const [busy, setBusy] = useState(false)
   const [expandedCandidate, setExpandedCandidate] = useState<string | null>(null)
   const [hiddenCandidates, setHiddenCandidates] = useState<Set<string>>(new Set())
-  const [savedCandidates, setSavedCandidates] = useState<ResearchDiscoveryCandidate[]>([])
+  const [savedCandidates, setSavedDiscoveries] = useState<SavedDiscovery[]>([])
+  const [savedLoading, setSavedLoading] = useState(true)
+  const [savedLoadError, setSavedLoadError] = useState('')
+  const [savedLoadAttempt, setSavedLoadAttempt] = useState(0)
+  const [savedWriting, setSavedWriting] = useState(false)
+  const [savedWriteError, setSavedWriteError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const { signal } = controller
+
+    async function load() {
+      setSavedLoading(true)
+      setSavedLoadError('')
+      const browserEntries = readBrowserDiscoveries()
+      let importFailed = false
+      try {
+        if (browserEntries.length) {
+          try {
+            const entries = await saveDiscoveries(browserEntries, signal)
+            if (signal.aborted) return
+            window.localStorage.removeItem(savedDiscoveriesKey)
+            setSavedDiscoveries(entries)
+            return
+          } catch {
+            if (signal.aborted) return
+            importFailed = true
+            setSavedLoadError('Could not finish importing browser saves.')
+          }
+        }
+        const response = await fetch(savedDiscoveriesUrl, { signal })
+        if (!response.ok) throw new Error('Could not load saved discoveries.')
+        const entries: SavedDiscovery[] = await response.json()
+        if (!signal.aborted) setSavedDiscoveries(entries)
+      } catch {
+        if (!signal.aborted && !importFailed) setSavedLoadError('Could not load saved discoveries.')
+      } finally {
+        if (!signal.aborted) setSavedLoading(false)
+      }
+    }
+
+    void load()
+    return () => controller.abort()
+  }, [savedLoadAttempt])
 
   async function research() {
     if (!seedId) return
@@ -795,10 +888,36 @@ export function ResearchSidequestBeta({ items }: { items: Item[] }) {
     if (expandedCandidate === candidateId) setExpandedCandidate(null)
   }
 
-  function toggleSaved(candidate: ResearchDiscoveryCandidate) {
-    setSavedCandidates(current => current.some(saved => saved.candidate_id === candidate.candidate_id)
-      ? current.filter(saved => saved.candidate_id !== candidate.candidate_id)
-      : [...current, candidate])
+  const savedControlsDisabled = savedLoading || savedWriting || Boolean(savedLoadError)
+
+  async function removeSavedDiscovery(id: string) {
+    setSavedWriting(true)
+    setSavedWriteError('')
+    try {
+      const response = await fetch(`${savedDiscoveriesUrl}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      if (!response.ok) throw new Error('Could not remove discovery.')
+      setSavedDiscoveries(current => current.filter(entry => entry.candidate_id !== id))
+    } catch {
+      setSavedWriteError('Could not remove the discovery. Try Remove again.')
+    } finally {
+      setSavedWriting(false)
+    }
+  }
+
+  async function toggleSaved(candidate: ResearchDiscoveryCandidate) {
+    const { candidate_id } = candidate
+    if (savedCandidates.some(entry => entry.candidate_id === candidate_id)) {
+      return removeSavedDiscovery(candidate_id)
+    }
+    setSavedWriting(true)
+    setSavedWriteError('')
+    try {
+      setSavedDiscoveries(await saveDiscoveries([discoverySnapshot(candidate)]))
+    } catch {
+      setSavedWriteError('Could not save the discovery. Try Save for later again.')
+    } finally {
+      setSavedWriting(false)
+    }
   }
 
   const visibleCandidates = result?.discovery_candidates.filter(candidate => !hiddenCandidates.has(candidate.candidate_id)) || []
@@ -807,6 +926,8 @@ export function ResearchSidequestBeta({ items }: { items: Item[] }) {
     <div className="beta-heading"><div><span>EXPERIMENT · DISCOVERY ENGINE v0.4</span><h2 id="research-sidequest-title">Little Discoveries <small>Beta</small></h2><p>Choose one curiosity. Asterisk will follow several leads into real sources and bring back a few small stories worth wandering into.</p></div></div>
     <div className="beta-controls"><label htmlFor="research-seed">Start with</label><select id="research-seed" value={seedId} onChange={event => setSeedId(event.target.value)}><option value="">Choose a curiosity…</option>{items.map(item => <option value={item.id} key={item.id}>{labels[item.kind]} · {item.title}</option>)}</select><button type="button" disabled={!seedId || busy} onClick={() => void research()}>{busy ? '✦ Researching…' : '✦ Research a Sidequest'}</button></div>
     <p className="beta-note">This experiment uses bounded external search and is not added to your saved Sidequests.</p>
+    {savedLoadError && <div className="beta-outcome"><p role="alert">{savedLoadError}</p><button type="button" onClick={() => setSavedLoadAttempt(attempt => attempt + 1)}>Retry</button></div>}
+    {savedWriteError && <p className="beta-note" role="alert">{savedWriteError}</p>}
     {outcome && <div className="beta-outcome" role="status"><strong>No researched discovery yet.</strong><p>{outcome.replace(/^No researched discovery yet\.\s*/, '')}</p></div>}
     {result && <div className="discovery-candidate-collection"><div className="candidate-collection-heading"><div><span>EXPLORE THE STORIES</span><h3>Which one catches you?</h3></div><small>{visibleCandidates.length} of {result.discovery_candidates.length} showing</small></div>
       {visibleCandidates.length === 0 ? <div className="all-candidates-dismissed" role="status"><strong>All findings hidden for this run.</strong><p>Research again whenever you want a fresh set of leads.</p></div> : <div className="discovery-candidate-grid">{visibleCandidates.map(candidate => {
@@ -817,12 +938,30 @@ export function ResearchSidequestBeta({ items }: { items: Item[] }) {
           <h3>{candidate.hook}</h3><p className="candidate-story">{candidate.story}</p>
           <p className="candidate-twist"><b>The turn:</b> {candidate.twist}</p>
           <a className="candidate-source-link" href={candidate.evidence[0].url} target="_blank" rel="noopener noreferrer">{candidate.evidence[0].title} ↗</a>
-          <div className="candidate-actions"><button type="button" onClick={() => setExpandedCandidate(expanded ? null : candidate.candidate_id)}>{expanded ? 'Close' : 'Explore'}</button><button type="button" onClick={() => dismissCandidate(candidate.candidate_id)}>Not interested</button><button type="button" className={saved ? 'saved' : ''} onClick={() => toggleSaved(candidate)}>{saved ? 'Saved ✓' : 'Save for later'}</button></div>
+          <div className="candidate-actions"><button type="button" onClick={() => setExpandedCandidate(expanded ? null : candidate.candidate_id)}>{expanded ? 'Close' : 'Explore'}</button><button type="button" onClick={() => dismissCandidate(candidate.candidate_id)}>Not interested</button><button type="button" className={saved ? 'saved' : ''} disabled={savedControlsDisabled} onClick={() => void toggleSaved(candidate)}>{saved ? 'Saved ✓' : 'Save for later'}</button></div>
           {expanded && <div className="candidate-details">{candidate.library_connection && <section><h4>A thread back to your library</h4><p>{candidate.library_connection}</p></section>}<section className="candidate-next"><h4>Go deeper</h4><p>{candidate.go_deeper}</p></section><section className="candidate-evidence-links"><h4>Supporting evidence</h4><p>{candidate.evidence.map((source, index) => <React.Fragment key={source.source_id}>{index > 0 && ' · '}<a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a></React.Fragment>)}</p></section><details className="candidate-research-details"><summary>Sources &amp; details</summary><p className="candidate-origin"><b>Started from:</b> {candidate.originating_curiosity}</p><p className="candidate-origin"><b>Research direction:</b> {candidate.research_direction}</p><section><h4>Evidence check</h4><p>{candidate.evidence_assessment}</p></section><div className="candidate-evidence"><h4>Source excerpts</h4>{candidate.evidence.map(source => <article key={source.source_id}><a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a><p>{source.excerpt}</p></article>)}</div></details></div>}
         </article>
       })}</div>}
     </div>}
-    {savedCandidates.length > 0 && <aside className="session-saved-discoveries"><div><span>SAVED FOR THIS SESSION</span><small>These disappear when this page is reloaded.</small></div>{savedCandidates.map(candidate => <article key={candidate.candidate_id}><strong>{candidate.hook}</strong><a href={candidate.evidence[0].url} target="_blank" rel="noopener noreferrer">Source ↗</a><button type="button" onClick={() => toggleSaved(candidate)}>Remove</button></article>)}</aside>}
+    {savedCandidates.length > 0 && <aside className="saved-discoveries" aria-labelledby="saved-discoveries-title">
+      <h3 id="saved-discoveries-title">Saved discoveries</h3>
+      {savedCandidates.map(candidate => <article key={candidate.candidate_id}>
+        <details>
+          <summary>{candidate.hook}</summary>
+          <div className="candidate-details">
+            <p>{candidate.story}</p>
+            <section className="candidate-next"><h4>Go deeper</h4><p>{candidate.go_deeper}</p></section>
+            <div className="candidate-evidence"><h4>Sources</h4>
+              {candidate.evidence.map(source => <div key={source.source_id}>
+                <a href={source.url} target="_blank" rel="noopener noreferrer">{source.title} ↗</a>
+                <p>{source.excerpt}</p>
+              </div>)}
+            </div>
+          </div>
+        </details>
+        <button type="button" disabled={savedControlsDisabled} aria-label={`Remove saved discovery: ${candidate.hook}`} onClick={() => void removeSavedDiscovery(candidate.candidate_id)}>Remove</button>
+      </article>)}
+    </aside>}
     {result?.title && result.discovery && result.why_surprising && result.what_remains_uncertain && result.next_rabbit_hole && (!result.suggested_candidate_id || !hiddenCandidates.has(result.suggested_candidate_id)) && <article className="researched-discovery-card">
       <div className="evidence-label">✦ RESEARCH-BACKED BETA · {result.seed_title}</div><h3>{result.title}</h3>
       <section><h4>The discovery</h4><p>{result.discovery}</p></section>
